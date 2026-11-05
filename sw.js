@@ -1,6 +1,6 @@
 // El Rincón de Rincón - service worker
 // Siempre pide la versión más reciente a internet. Solo usa la copia guardada si no hay conexión.
-const CACHE = "elrincon-v1";
+const CACHE = "elrincon-v2";
 
 self.addEventListener("install", e => {
   self.skipWaiting();
