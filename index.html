@@ -159,6 +159,10 @@ textarea{min-height:60px}
 .cal button{border:1px solid #FFD39A;background:#fff;border-radius:8px;padding:4px 0 3px;min-height:46px;font-size:13px;color:var(--cafe);display:flex;flex-direction:column;align-items:center}
 .cal button small{font-size:9px;color:var(--verde);font-weight:800}.cal button.hay{background:#FFF1D6;border-color:#FF9A1F}.cal button.on{background:linear-gradient(180deg,#FF9A1F,#E25D00);color:#fff;border-color:#C95000}.cal button.on small{color:#fff}.cal span{min-height:46px}
 .tipo{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:800}.tipo.f{background:#FFE2BF;color:#8A3A00}.tipo.v{background:#D3F5DD;color:#06592A}.tipo.i{background:#EAD9FF;color:#5B1FA3}
+.av{position:relative;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:linear-gradient(180deg,#FFE2BF,#FFB866);border:3px solid var(--naranja);overflow:hidden;flex:none}
+.av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+#hojaPrint{display:none}
+@media print{body>*:not(#hojaPrint){display:none!important}#hojaPrint{display:block!important;color:#000;background:#fff;padding:12px;font-family:Nunito,sans-serif}#hojaPrint table{width:100%;border-collapse:collapse}#hojaPrint td{border-bottom:1px solid #ccc;padding:5px;vertical-align:top}#hojaPrint h1,#hojaPrint h2{font-family:"Bree Serif",serif;color:#C95000}}
 @media (min-width:700px){body{padding-bottom:0}.nav{position:static;max-width:920px;margin:10px auto 0;border:3px solid var(--sol);border-radius:14px;overflow:hidden}.toast{bottom:30px}}
 </style>
 </head>
@@ -179,7 +183,7 @@ const LS = {
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) { } },
   del(k) { try { localStorage.removeItem(k); } catch (e) { } }
 };
-const S = { tok: null, yo: null, d: null, c: null, ver: 0, vista: 'inicio', sub: {}, cart: [], pagos: {}, cliente: '', desc: '', est: null, fecha: null };
+const S = { tok: null, yo: null, d: null, c: null, ver: 0, vista: 'portada', sub: {}, cart: [], pagos: {}, cliente: '', desc: '', est: null, fecha: null };
 
 function api(fn) {
   const args = Array.prototype.slice.call(arguments, 1);
@@ -313,6 +317,7 @@ function calcular(d) {
       if (r.hist) { vc[r.id] = { lineas: [], total: 0 }; return; }
       let tot = 0;
       const ls = (r.lineas || []).map(function (l) {
+        if (!l.item || l.animal) return 0;
         let c = take(l.item, (+l.cant || 0) * (+l.base || 1));
         (l.emp || []).forEach(function (m) { c += take(m.item, (+m.cant || 0) * (+l.cant || 0)); });
         tot += c; return c;
@@ -418,6 +423,7 @@ function saldos() {
   d.cfg.medios.forEach(function (m) { s[m.id] = +m.inicial || 0; });
   const add = function (id, v) { if (id && s[id] != null) s[id] += v; };
   d.reg.ventas.forEach(function (v) { (v.pagos || []).forEach(function (p) { add(p.medio, +p.valor || 0); }); });
+  d.reg.compras.concat(d.reg.gastos).forEach(function (r) { (r.abonos || []).forEach(function (a) { add(a.medio, -(+a.valor || 0)); }); });
   d.reg.compras.forEach(function (r) { pagosGasto(r, +r.costo || 0).forEach(function (p) { add(p.medio, -(+p.valor || 0)); }); });
   d.reg.gastos.forEach(function (r) { pagosGasto(r, +r.valor || 0).forEach(function (p) { add(p.medio, -(+p.valor || 0)); }); });
   d.reg.prestamos.forEach(function (r) { add(r.medio, -(+r.monto || 0)); (r.devs || []).forEach(function (x) { add(x.medio, +x.monto || 0); }); });
@@ -438,8 +444,17 @@ function pagosGasto(r, v) {
   if (r.pagos && r.pagos.length) return r.pagos;
   return r.medio ? [{ medio: r.medio, valor: v }] : [];
 }
+function sumaMov(l) { return (l || []).reduce(function (a, p) { return a + (+p.valor || 0); }, 0); }
+function pendienteGasto(r, v) { return r.deuda ? Math.max(0, v - sumaMov(r.pagos) - sumaMov(r.abonos)) : 0; }
+function deudasProv() {
+  const out = [];
+  S.d.reg.compras.forEach(function (r) { const p = pendienteGasto(r, +r.costo || 0); if (p > 0.5) out.push({ t: 'compras', r: r, v: +r.costo || 0, pend: p, quien: r.proveedor || r.nombre, que: r.nombre }); });
+  S.d.reg.gastos.forEach(function (r) { const p = pendienteGasto(r, +r.valor || 0); if (p > 0.5) out.push({ t: 'gastos', r: r, v: +r.valor || 0, pend: p, quien: r.acreedor || r.desc, que: r.desc }); });
+  return out.sort(function (a, b) { return a.r.fecha < b.r.fecha ? -1 : 1; });
+}
 function valorCaja(r, v) {
   if (r.fuera) return 0;
+  if (r.deuda) return sumaMov(r.pagos) + sumaMov(r.abonos);
   if (r.pagos && r.pagos.length) return r.pagos.reduce(function (a, p) { return a + (+p.valor || 0); }, 0);
   return v;
 }
@@ -619,7 +634,7 @@ VISTAS.inventario = function () {
     return '<tr><td>' + h(x.emoji) + ' <b>' + h(x.nombre) + '</b></td><td class="num">' + qty(s.q, x.unidad) + '</td><td class="num">' + money(s.q > 0 ? s.v : 0) + '</td><td>' + (bajo ? '<span class="tag bajo">Por comprar</span>' : (s.q < 0 ? '<span class="tag bajo">Negativo</span>' : '')) + '</td><td><button class="btn mini sec" data-act="salida" data-it="' + h(x.id) + '">📤 Daño</button></td></tr>';
   }).join('');
   return '<div class="titulo serif">📦 Inventario</div><div class="card"><div class="row">' +
-    '<button class="btn" data-act="producir">🧀 Producir</button><button class="btn sec" data-act="salida">📤 Se dañó un tarro, se venció o se regaló</button><button class="btn sec" data-act="contar">🔢 Contar</button></div></div>' +
+    '<button class="btn" data-act="producir">🧀 Producir</button><button class="btn sec" data-act="salida">📤 Se dañó un tarro, se venció o se regaló</button><button class="btn sec" data-act="contar">🔢 Contar y corregir lo que hay</button>' + (esSup() ? '<button class="btn sol" data-act="nuevoitem" data-t="producto">➕ Agregar producto</button><button class="btn sol" data-act="nuevoitem" data-t="insumo">➕ Agregar insumo o empaque</button>' : '') + '</div></div>' +
     '<div class="chips"><button class="chip ' + (tipo === 'producto' ? 'on' : '') + '" data-act="subinv" data-v="producto">Productos</button><button class="chip ' + (tipo === 'insumo' ? 'on' : '') + '" data-act="subinv" data-v="insumo">Insumos y empaques</button></div>' +
     '<div class="card scroll"><table class="tabla"><tr><th>Producto</th><th>Hay</th><th>Valor</th><th></th><th></th></tr>' + (filas || '<tr><td colspan="5" class="vacio">Nada por aquí.</td></tr>') + '</table></div>' +
     '<div class="card"><h3>Valor de lo que hay en inventario</h3><b class="serif" style="font-size:22px">' + money(valorExistencias()) + '</b></div>' + listaMov();
@@ -630,7 +645,7 @@ function listaMov() {
   const ev = [];
   R.produccion.forEach(function (r) { ev.push({ f: r.fecha, ts: r.ts, t: 'produccion', id: r.id, txt: '🧀 Producción: ' + qty(r.cant, (itemPor(r.item) || {}).unidad) + ' de ' + r.nombre + ' (' + money(S.c.pc[r.id] || 0) + ' en insumos)' }); });
   R.salidas.forEach(function (r) { ev.push({ f: r.fecha, ts: r.ts, t: 'salidas', id: r.id, txt: '📤 ' + (r.motivoTxt || r.motivo) + ': ' + qty(r.cant, (itemPor(r.item) || {}).unidad) + ' de ' + r.nombre + ' (' + money(S.c.sc[r.id] || 0) + ')' }); });
-  R.conteosInv.forEach(function (r) { ev.push({ f: r.fecha, ts: r.ts, t: 'conteosInv', id: r.id, txt: '🔢 Conteo de ' + r.nombre + ': había ' + qty(r.sistema) + ', contó ' + qty(r.contado) }); });
+  R.conteosInv.forEach(function (r) { ev.push({ f: r.fecha, ts: r.ts, t: 'conteosInv', id: r.id, txt: '🔢 Conteo de ' + r.nombre + ': había ' + qty(r.sistema) + ', contó ' + qty(r.contado) + ' (' + (r.contado - r.sistema >= 0 ? '+' : '') + qty(r.contado - r.sistema) + ')' + (r.nota ? ' · ' + r.nota : '') }); });
   ev.sort(function (a, b) { return a.f < b.f ? 1 : a.f > b.f ? -1 : (b.ts || 0) - (a.ts || 0); });
   if (!ev.length) return '';
   return '<div class="card"><h2 class="serif">Últimos movimientos</h2>' + ev.slice(0, 15).map(function (e) {
@@ -717,11 +732,11 @@ ACT.guardarsalida = async function (b) {
 };
 
 ACT.contar = function () {
-  const l = S.d.items.filter(function (x) { return x.activo !== false && x.tipo === (S.sub.inv || 'producto'); });
-  modal('<h2>🔢 Contar el inventario</h2><p class="small muted">Escribe lo que realmente hay. Usa coma para los decimales (0,725). Deja vacío lo que no contaste.</p>' +
+  const l = S.d.items.filter(function (x) { return x.activo !== false; }).sort(function (a, b) { return (a.tipo === b.tipo ? 0 : a.tipo === 'producto' ? -1 : 1) || a.nombre.localeCompare(b.nombre, 'es'); });
+  modal('<h2>🔢 Contar y corregir el inventario</h2><p class="small muted">Escribe lo que realmente hay. El sistema queda con ese número y se anota qué cambió. Usa coma para decimales (0,725). Deja vacío lo que no contaste.</p>' +
     '<div class="scroll"><table class="tabla"><tr><th>Producto</th><th>Sistema</th><th>Contado</th></tr>' + l.map(function (x, i) {
       return '<tr><td>' + h(x.emoji) + ' ' + h(x.nombre) + '</td><td class="num">' + qty(stockDe(x.id), x.unidad) + '</td><td><input style="width:100px" inputmode="decimal" id="ct' + i + '" data-id="' + h(x.id) + '"></td></tr>';
-    }).join('') + '</table></div><label>Fecha</label><input type="date" id="ctFecha" value="' + hoy() + '"><button class="btn full" style="margin-top:12px" data-act="guardarcontar">Guardar conteo</button>', 'ancho');
+    }).join('') + '</table></div><label>Nota del conteo (por qué cambió)</label><input id="ctNota" placeholder="Ej: conteo del fin de mes, se dañó un lote"><label>Fecha</label><input type="date" id="ctFecha" value="' + hoy() + '"><button class="btn full" style="margin-top:12px" data-act="guardarcontar">Guardar conteo</button>', 'ancho');
 };
 ACT.guardarcontar = async function (b) {
   const ins = Array.prototype.slice.call(document.querySelectorAll('#modal input[data-id]')).filter(function (e) { return e.value.trim() !== ''; });
@@ -733,7 +748,7 @@ ACT.guardarcontar = async function (b) {
     if ((s > 0 && c > s * 5) || (s <= 0 && c > 1000)) {
       if (!(await confirmar('En ' + x.nombre + ' el sistema decía ' + qty(s, x.unidad) + ' y escribiste ' + qty(c, x.unidad) + '. ¿Es correcto? (Para decimales usa coma: 0,725)', 'Sí, es correcto'))) return;
     }
-    lista.push({ fecha: val('ctFecha') || hoy(), item: x.id, nombre: x.nombre, sistema: s, contado: c });
+    lista.push({ fecha: val('ctFecha') || hoy(), item: x.id, nombre: x.nombre, sistema: s, contado: c, nota: val('ctNota').trim() });
   }
   b.disabled = true;
   try {
@@ -857,19 +872,22 @@ function cuadre() {
   const gastos = d.reg.gastos.reduce(function (a, r) { return a + valorCaja(r, +r.valor || 0); }, 0);
   const compras = d.reg.compras.reduce(function (a, r) { return a + valorCaja(r, +r.costo || 0); }, 0);
   const base = d.cfg.histCargado ? 0 : d.cfg.medios.reduce(function (a, m) { return a + (+m.inicial || 0); }, 0);
-  const deberia = base + ventas - gastos - compras;
-  return { ventas: ventas, gastos: gastos, compras: compras, deberia: deberia, hay: T.total, dif: T.total - deberia, T: T };
+  const A = d.cfg.cuadreAj || {}, av = function (k) { return A[k] ? (+A[k].v || 0) : 0; };
+  const V2 = ventas + av('ventas'), G2 = gastos + av('gastos'), C2 = compras + av('compras'), O2 = av('otro');
+  const deberia = base + V2 - G2 - C2 + O2;
+  return { ventas: V2, gastos: G2, compras: C2, otro: O2, aj: A, deberia: deberia, hay: T.total, dif: T.total - deberia, T: T };
 }
 function cuadreCard() {
   const c = cuadre(), ok = Math.abs(c.dif) < 1;
   return '<div class="card"><h2 class="serif">⚖️ ¿Cuadra la caja?</h2>' +
-    '<div class="linea"><div class="nm">Ventas (todo lo vendido)</div><b class="num">' + money(c.ventas) + '</b></div>' +
-    '<div class="linea"><div class="nm">Menos: gastos</div><b class="num">' + money(c.gastos) + '</b></div>' +
-    '<div class="linea"><div class="nm">Menos: compras de inventario</div><b class="num">' + money(c.compras) + '</b></div>' +
+    '<div class="linea"><div class="nm">Ventas (todo lo vendido)' + ajTxt(c.aj.ventas) + '</div><b class="num">' + money(c.ventas) + '</b></div>' +
+    '<div class="linea"><div class="nm">Menos: gastos' + ajTxt(c.aj.gastos) + '</div><b class="num">' + money(c.gastos) + '</b></div>' +
+    '<div class="linea"><div class="nm">Menos: compras de inventario' + ajTxt(c.aj.compras) + '</div><b class="num">' + money(c.compras) + '</b></div>' +
+    (c.aj.otro && +c.aj.otro.v ? '<div class="linea"><div class="nm">' + h(c.aj.otro.n || 'Otro ajuste') + '<small>ajuste tuyo</small></div><b class="num">' + money(c.otro) + '</b></div>' : '') +
     '<div class="linea tot"><div class="nm"><b>Según ventas y gastos debería haber</b></div><b class="num">' + money(c.deberia) + '</b></div>' +
     '<div class="linea"><div class="nm">Hay (plata en cada lugar + lo que me deben)</div><b class="num">' + money(c.hay) + '</b></div>' +
     '<div class="aviso big ' + (ok ? 'okc' : c.dif < 0 ? 'malc' : 'masc') + '">' + (ok ? '✅ <b>La caja cuadra</b> con tus ventas y gastos.' : c.dif < 0 ? '⚠️ <b>Hace falta ' + money(-c.dif) + '.</b> Según tus ventas y gastos debería haber ' + money(c.deberia) + ' y hay ' + money(c.hay) + '.' : '➕ <b>Sobra ' + money(c.dif) + '.</b> Según tus ventas y gastos debería haber ' + money(c.deberia) + ' y hay ' + money(c.hay) + '.') +
-    (ok ? '' : '<br><span class="small">Pasa cuando un gasto no se anotó, una venta no se registró, o se corrigió un conteo de caja.</span>') + '</div></div>';
+    (ok ? '' : '<br><span class="small">Pasa cuando un gasto no se anotó, una venta no se registró, o se corrigió un conteo de caja.</span>') + '</div><button class="btn mini sec" style="margin-top:8px" data-act="editcuadre">✏️ Modificar el cuadre</button></div>';
 }
 function cajaSaldos() {
   const d = S.d, T = totalesCaja(), s = T.s;
@@ -1089,13 +1107,13 @@ function calcBalance(pref) {
 VISTAS.balance = function () {
   const b = S.sub.bal || (S.sub.bal = { modo: 'mes', mes: mesDe(hoy()), anio: hoy().slice(0, 4) });
   const pref = b.modo === 'mes' ? b.mes : b.anio, B = calcBalance(pref), d = S.d;
-  const kp = function (cls, t, v) { return '<div class="kpi ' + cls + '"><small>' + t + '</small><b>' + v + '</b></div>'; };
+  const kp = function (cls, t, v, k) { return '<div class="kpi ' + cls + '" data-act="balexp" data-k="' + k + '" style="cursor:pointer"><small>' + t + ' ⓘ</small><b>' + v + '</b></div>'; };
   const filas = Object.keys(B.prod).map(function (k) { return B.prod[k]; }).sort(function (a, c) { return c.ing - a.ing; }).map(function (p) {
     const x = itemPor(p.item) || { nombre: p.nombre || '(borrado)', emoji: '', unidad: '' }, gan = p.ing - p.costo, pb = p.ing > 0 ? gan / p.ing * 100 : null;
     if (p.ingH > 0 && p.ingH >= p.ing - 1) return '<tr><td>' + h(x.emoji) + ' ' + h(x.nombre) + '</td><td class="num">' + qty(p.u, x.unidad) + '</td><td class="num">' + money(p.ing) + '</td><td class="num muted" colspan="5">sin costo registrado (dato anterior)</td></tr>';
     const rep = d.cfg.repartirGastos !== false && B.ing > 0 ? (B.gen + B.otros) * p.ing / B.ing : 0, neto = gan - rep, pn = p.ing > 0 ? neto / p.ing * 100 : null;
     const min = +d.cfg.margenMin || 30;
-    return '<tr><td>' + h(x.emoji) + ' ' + h(x.nombre) + '</td><td class="num">' + qty(p.u, x.unidad) + '</td><td class="num">' + money(p.ing) + '</td><td class="num">' + money(p.costo) + '</td><td class="num">' + money(gan) + '</td><td class="num"><span class="tag ' + (pb != null && pb < min ? 'bajo' : 'ok') + '">' + pct(pb) + '</span></td><td class="num">' + money(neto) + '</td><td class="num">' + pct(pn) + '</td></tr>';
+    return '<tr' + (p.item ? ' data-act="balprod" data-id="' + h(p.item) + '" style="cursor:pointer"' : '') + '><td>' + h(x.emoji) + ' ' + h(x.nombre) + '</td><td class="num">' + qty(p.u, x.unidad) + '</td><td class="num">' + money(p.ing) + '</td><td class="num">' + money(p.costo) + '</td><td class="num">' + money(gan) + '</td><td class="num"><span class="tag ' + (pb != null && pb < min ? 'bajo' : 'ok') + '">' + pct(pb) + '</span></td><td class="num">' + money(neto) + '</td><td class="num">' + pct(pn) + '</td></tr>';
   }).join('');
   let anual = '';
   if (b.modo === 'anio') {
@@ -1111,8 +1129,8 @@ VISTAS.balance = function () {
   return '<div class="titulo serif">📊 Balance</div><div class="card"><div class="chips"><button class="chip ' + (b.modo === 'mes' ? 'on' : '') + '" data-act="balmodo" data-v="mes">Por mes</button><button class="chip ' + (b.modo === 'anio' ? 'on' : '') + '" data-act="balmodo" data-v="anio">Por año</button></div>' +
     (b.modo === 'mes' ? '<input type="month" data-bal="mes" value="' + h(b.mes) + '">' : '<input type="number" data-bal="anio" value="' + h(b.anio) + '" min="2020" max="2100">') + '</div>' +
     (B.histIng > 0 ? '<div class="aviso">📜 Este periodo incluye ' + money(B.histIng) + ' de ventas cargadas de tu Excel. De esas no se sabe el costo por producto, así que la <b>ganancia real es Ventas menos Gastos</b> (mira "Ganancia neta").</div>' : '') +
-    '<div class="kpis">' + kp('v', 'Ventas', money(B.ing)) + kp('', 'Costo de lo vendido', money(B.costo)) + kp('v', 'Ganancia de productos', money(B.bruta) + ' · ' + pct(B.ing > 0 ? B.bruta / B.ing * 100 : null)) +
-    kp('n', 'Gastos del campo y otros', money(B.gen)) + kp('r', 'Daños, vencidos y regalos', money(B.otros)) + kp('v', 'Ganancia neta', money(B.neta) + ' · ' + pct(B.ing > 0 ? B.neta / B.ing * 100 : null)) + '</div>' +
+    '<div class="kpis">' + kp('v', 'Ventas', money(B.ing), 'ing') + kp('', 'Costo de lo vendido', money(B.costo), 'costo') + kp('v', 'Ganancia de productos', money(B.bruta) + ' · ' + pct(B.ing > 0 ? B.bruta / B.ing * 100 : null), 'bruta') +
+    kp('n', 'Gastos del campo y otros', money(B.gen), 'gen') + kp('r', 'Daños, vencidos y regalos', money(B.otros), 'otros') + kp('v', 'Ganancia neta', money(B.neta) + ' · ' + pct(B.ing > 0 ? B.neta / B.ing * 100 : null), 'neta') + '</div><p class="small muted" style="margin:-4px 4px 8px">👆 Toca cualquier cuadro para ver por qué sale ese número.</p>' +
     '<div class="card"><div class="linea"><div class="nm">🐄 Ahorrado en terneras (inversión)</div><b class="num">' + money(B.inv) + '</b></div>' +
     (B.litros > 0 ? '<div class="linea"><div class="nm">🥛 Litros ordeñados</div><b class="num">' + qty(B.litros, 'L') + '</b></div><div class="linea"><div class="nm">Gasto del campo por litro ordeñado</div><b class="num">' + money(B.gen / B.litros) + '</b></div>' : '') + '</div>' +
     '<div class="card"><h2 class="serif">Ganancia por producto</h2><div class="scroll"><table class="tabla"><tr><th>Producto</th><th>Vendido</th><th>Ingresos</th><th>Costo</th><th>Ganancia</th><th>% ganancia</th><th>Tras gastos</th><th>% tras gastos</th></tr>' +
@@ -1474,7 +1492,7 @@ function histArmar(D) {
   const pres = [{ id: 'pe-h-0001', hist: true, fecha: D.corte, quien: 'Jefferson', monto: D.jefer[0], medio: '', motivo: 'Saldo anterior: ' + D.jefer[1], devs: [], ts: Date.parse(D.corte) }];
   return { ventas: ventas, gastos: gastos, pres: pres };
 }
-const APP_VER = '3.0 · 6 nov 2026';
+const APP_VER = '3.3 · 7 nov 2026';
 function histEstado(D) {
   const A = histArmar(D), tiene = {};
   S.d.reg.ventas.forEach(function (v) { if (v.hist) tiene[v.id] = v; });
@@ -1567,6 +1585,12 @@ function pyTexto(k) {
   if (!w.modo) return esV ? 'Escoge cómo pagó el cliente.' : 'Escoge de dónde sacaste la plata.';
   if (w.modo === 'regalo') return '🎁 Se regala: no se cobra, pero sale del inventario como regalo.';
   if (w.modo === 'fuera') return '🏠 No sale de ninguna cuenta de la caja (la pagó alguien por fuera).';
+  if (!esV && w.modo === 'fiado') {
+    if (!(tot > 0)) return 'Escribe primero el valor.';
+    const pg = pySuma(k), rs = tot - pg;
+    if (rs < -0.5) return '⚠️ El anticipo pasa el total por ' + money(-rs) + '.';
+    return 'Pagas hoy <b>' + money(pg) + '</b> · Queda debiendo al proveedor: <b>' + money(rs) + '</b>.';
+  }
   if (w.modo !== 'mixto' && w.modo !== 'fiado') return '✅ Todo ' + (esV ? 'entra' : 'sale') + ' por ' + h(medioNombre(w.modo)) + '.';
   const pag = pySuma(k), res = tot - pag;
   if (esV) {
@@ -1586,7 +1610,7 @@ function pyHtml(k) { return '<div id="py_' + k + '">' + pyInner(k) + '</div>'; }
 function pyInner(k) {
   const w = PY[k], ms = S.d.cfg.medios;
   let chips = ms.map(function (m) { return '<button class="chip ' + (w.modo === m.id ? 'on' : '') + '" data-act="pymodo" data-k="' + k + '" data-m="' + h(m.id) + '">' + h(medioEtiqueta(m)) + '</button>'; }).join('');
-  w.extras.forEach(function (e) { chips += '<button class="chip ' + PY_EXTRA[e][1] + ' ' + (w.modo === e ? 'on' : '') + '" data-act="pymodo" data-k="' + k + '" data-m="' + e + '">' + PY_EXTRA[e][0] + '</button>'; });
+  w.extras.forEach(function (e) { chips += '<button class="chip ' + PY_EXTRA[e][1] + ' ' + (w.modo === e ? 'on' : '') + '" data-act="pymodo" data-k="' + k + '" data-m="' + e + '">' + (e === 'fiado' && k !== 'venta' ? '📒 Anticipo y debo el resto' : PY_EXTRA[e][0]) + '</button>'; });
   let panel = '';
   if (w.modo === 'mixto' || w.modo === 'fiado') {
     const sel = function (id, cur) { return '<select id="' + id + '" data-pysel="' + k + '" style="width:auto;padding:6px 8px;flex:1">' + opts(ms.map(function (m) { return [m.id, medioEtiqueta(m)]; }), cur) + '</select>'; };
@@ -1596,7 +1620,7 @@ function pyInner(k) {
     const inputs = ms.map(function (m) {
       return '<div><label>' + h(medioEtiqueta(m)) + '</label><div class="row" style="flex-wrap:nowrap;gap:4px"><input inputmode="numeric" data-py="' + h(m.id) + '" data-pyk="' + k + '" value="' + h(w.vals[m.id] || '') + '" placeholder="0"><button class="btn mini sec" data-act="pyresto" data-k="' + k + '" data-m="' + h(m.id) + '" aria-label="Poner lo que falta">↧</button></div></div>';
     }).join('');
-    panel = (w.modo === 'fiado' ? '<p class="small muted" style="margin:6px 0 0">Si dejó un <b>anticipo</b>, escribe cuánto y por dónde entró. Lo demás queda debiendo.</p>' : '') + mit + '<div class="grid2">' + inputs + '</div>';
+    panel = (w.modo === 'fiado' ? (esV ? '<p class="small muted" style="margin:6px 0 0">Si dejó un <b>anticipo</b>, escribe cuánto y por dónde entró. Lo demás queda debiendo.</p>' : '<p class="small muted" style="margin:6px 0 0">Escribe cuánto pagas hoy de <b>anticipo</b> y por dónde sale la plata. Lo que falta queda como deuda con el proveedor y lo pagas después desde Cuentas por pagar.</p>') : '') + mit + '<div class="grid2">' + inputs + '</div>';
   }
   return '<div class="pagos">' + chips + '</div>' + panel + '<div class="aviso" id="pyr_' + k + '">' + pyTexto(k) + '</div>';
 }
@@ -1607,6 +1631,14 @@ function pyResultado(k) {
   if (w.modo === 'hist') return { pagos: [], debe: 0, hist: true };
   if (w.modo === 'regalo') return { pagos: [], debe: 0, regalo: true };
   if (w.modo === 'fuera') return { pagos: [], debe: 0, fuera: true };
+  if (!esV && w.modo === 'fiado') {
+    const pg = [];
+    Object.keys(w.vals).forEach(function (m) { const v = pm(w.vals[m]); if (v > 0) pg.push({ medio: m, valor: v }); });
+    const sm = pg.reduce(function (s, p) { return s + p.valor; }, 0), rs = tot - sm;
+    if (!(tot > 0)) return { err: 'Escribe primero el valor.' };
+    if (rs < -0.5) return { err: 'El anticipo pasa el total.' };
+    return { pagos: pg, debe: rs, deuda: rs > 0.5 };
+  }
   if (w.modo === 'mixto' || w.modo === 'fiado') {
     const pagos = [];
     Object.keys(w.vals).forEach(function (m) { const v = pm(w.vals[m]); if (v > 0) pagos.push({ medio: m, valor: v }); });
@@ -1669,12 +1701,14 @@ function prodsGrupo(g) {
 VISTAS.vender = function () {
   const d = S.d, ed = S.edit;
   const grupos = GRUPOS.filter(function (g) { return prodsGrupo(g[0]).length; });
-  if (!S.catAb || !grupos.some(function (g) { return g[0] === S.catAb; })) S.catAb = '';
+  const vivos = animales().filter(function (a) { return a.estado === 'activo'; });
+  if (!S.catAb || (!grupos.some(function (g) { return g[0] === S.catAb; }) && !(S.catAb === 'animales' && vivos.length))) S.catAb = '';
   const tiles = grupos.map(function (g) {
     const lista = prodsGrupo(g[0]), n = lista.reduce(function (s, e) { return s + cantEnCarro(e[0].id, e[1].id); }, 0);
     return '<button class="cat ' + (S.catAb === g[0] ? 'abierta' : '') + '" data-act="abrircat" data-g="' + g[0] + '">' + (n > 0 ? '<span class="badge">' + numTxt(n) + '</span>' : '') + '<span class="em">' + g[1] + '</span>' + h(g[2]) + '<small>' + lista.length + (lista.length === 1 ? ' opción' : ' opciones') + '</small></button>';
-  }).join('');
-  const panel = S.catAb ? '<div class="card" style="border-top-color:var(--verde)"><h2 class="serif">' + h(GRUPOS.filter(function (g) { return g[0] === S.catAb; })[0][2]) + ' · toca lo que lleva</h2><div class="grid3">' + prodsGrupo(S.catAb).map(function (e) { return botonesProd(e[0], e[1]); }).join('') + '</div></div>' : '<p class="small muted" style="margin:0 0 8px">Toca una categoría para ver sus productos. 👆</p>';
+  }).join('') + (vivos.length ? '<button class="cat ' + (S.catAb === 'animales' ? 'abierta' : '') + '" data-act="abrircat" data-g="animales">' + (S.cart.filter(function (l) { return l.animal; }).length ? '<span class="badge">' + S.cart.filter(function (l) { return l.animal; }).length + '</span>' : '') + '<span class="em">🐐</span>Animales<small>' + vivos.length + ' en la finca</small></button>' : '');
+  const panelAn = S.catAb === 'animales' ? '<div class="card" style="border-top-color:var(--verde)"><h2 class="serif">Animales · toca el que vendiste</h2><div class="grid3">' + vivos.map(function (a) { const en = S.cart.some(function (l) { return l.animal === a.id; }); return '<button class="prod ' + (en ? 'sel' : '') + '" data-act="addanimal" data-id="' + h(a.id) + '">' + (en ? '<span class="badge">1</span>' : '') + '<span class="em">' + (a.tipo === 'ternera' ? '🐄' : '🐐') + '</span><b>' + h(a.nombre) + '</b><small>' + (a.sexo === 'macho' ? 'Macho' : 'Hembra') + ' · ' + h(edadTxt(a)) + '</small></button>'; }).join('') + '</div><p class="small muted">Después escribe el precio en la línea del animal. Al guardar la venta queda marcado como vendido.</p></div>' : '';
+  const panel = S.catAb === 'animales' ? panelAn : S.catAb ? '<div class="card" style="border-top-color:var(--verde)"><h2 class="serif">' + h(GRUPOS.filter(function (g) { return g[0] === S.catAb; })[0][2]) + ' · toca lo que lleva</h2><div class="grid3">' + prodsGrupo(S.catAb).map(function (e) { return botonesProd(e[0], e[1]); }).join('') + '</div></div>' : '<p class="small muted" style="margin:0 0 8px">Toca una categoría para ver sus productos. 👆</p>';
   let carro = '';
   if (!S.cart.length) carro = '<div class="vacio">Todavía no ha escogido nada.</div>';
   else carro = S.cart.map(function (l, i) {
@@ -1701,7 +1735,7 @@ VISTAS.vender = function () {
     '<div class="row" style="margin-top:8px"><button class="btn full grow" data-act="guardarventa">✅ ' + (ed ? 'Guardar cambios' : 'Guardar venta') + '</button><button class="btn sec" data-act="limpiarventa">Vaciar</button></div></div>';
 };
 ACT.abrircat = function (b) {
-  const g = b.dataset.g, lista = prodsGrupo(g);
+  const g = b.dataset.g, lista = g === 'animales' ? [] : prodsGrupo(g);
   if (lista.length === 1 && g !== S.catAb) { ACT.addcart({ dataset: { it: lista[0][0].id, pe: lista[0][1].id } }); return; }
   S.catAb = S.catAb === g ? '' : g; render();
 };
@@ -1739,14 +1773,22 @@ ACT.guardarventa = async function (b) {
   const f = S.fecha || hoy(), bo = bolsaEst();
   const rec = Object.assign({}, S.edit || {}, { fecha: f, cliente: S.cliente.trim(), descuento: R.regalo ? sub : pm(S.desc), total: tot,
     pagos: R.pagos.map(function (p) { return { medio: p.medio, valor: p.valor, fecha: f }; }), bolsas: bo.si ? (pq(bo.n) || 1) : 0,
-    lineas: S.cart.map(function (l) { return { item: l.item, pres: l.pres, nombre: l.nombre + (l.presNombre && l.presNombre !== 'Unidad' ? ' · ' + l.presNombre : ''), cant: l.cant, base: l.base, precio: l.precio, emp: l.emp }; }) });
+    lineas: S.cart.map(function (l) { return { animal: l.animal || '', item: l.item, pres: l.pres, nombre: l.nombre + (l.presNombre && l.presNombre !== 'Unidad' ? ' · ' + l.presNombre : ''), cant: l.cant, base: l.base, precio: l.precio, emp: l.emp }; }) });
   if (R.regalo) rec.regalo = true; else delete rec.regalo;
   const editando = !!S.edit;
   b.disabled = true;
   try {
     const falta = [];
-    S.cart.forEach(function (l) { if (stockDe(l.item) < l.cant * l.base - 0.000001) falta.push(l.nombre); });
+    S.cart.forEach(function (l) { if (!l.animal && stockDe(l.item) < l.cant * l.base - 0.000001) falta.push(l.nombre); });
     await guardarReg('ventas', rec);
+    for (let i = 0; i < S.cart.length; i++) {
+      const an = S.cart[i].animal && animalPor(S.cart[i].animal);
+      if (an && an.estado !== 'vendido') {
+        const vv = { fecha: f, comprador: S.cliente.trim(), valor: S.cart[i].precio * S.cart[i].cant };
+        await guardarReg('animales', Object.assign({}, an, { estado: 'vendido', vendido: vv }));
+        await guardarReg('eventosAnimal', { animal: an.id, animalNombre: an.nombre, fecha: f, tipo: 'venta', detalle: 'Vendida' + (vv.comprador ? ' a ' + vv.comprador : '') + ' por ' + money(vv.valor) });
+      }
+    }
     vaciarVenta();
     if (editando) { S.vista = 'ventas'; }
     toast((editando ? 'Cambios guardados ✅' : 'Venta guardada ✅') + (falta.length && !editando ? ' (ojo: en inventario no alcanzaba ' + falta.join(', ') + ')' : ''), falta.length && !editando ? 'err' : 'ok');
@@ -1762,7 +1804,7 @@ ACT.editarventa = function (b) {
   S.desc = v.regalo ? '' : (+v.descuento > 0 ? fmtN.format(v.descuento) : '');
   S.cart = (v.lineas || []).map(function (l) {
     const x = itemPor(l.item), nom = String(l.nombre || '').split(' · ');
-    return { item: l.item, pres: l.pres, nombre: x ? x.nombre : nom[0], presNombre: nom[1] || (x && (x.pres || []).filter(function (p) { return p.id === l.pres; })[0] || { nombre: '' }).nombre || '', emoji: x ? x.emoji : (l.em || '🛍️'), cant: +l.cant || 0, precio: +l.precio || 0, base: +l.base || 1, emp: l.emp || [] };
+    return { animal: l.animal || '', item: l.item, pres: l.pres, nombre: x ? x.nombre : nom[0], presNombre: nom[1] || (x && (x.pres || []).filter(function (p) { return p.id === l.pres; })[0] || { nombre: '' }).nombre || '', emoji: x ? x.emoji : (l.animal ? '🐐' : (l.em || '🛍️')), cant: +l.cant || 0, precio: +l.precio || 0, base: +l.base || 1, emp: l.emp || [] };
   });
   S.bolsa = +v.bolsas > 0 ? { si: true, n: String(v.bolsas) } : { si: false, n: '1' };
   pyIniciar('venta', totalVenta, ['mixto', 'fiado', 'regalo']);
@@ -1944,11 +1986,14 @@ async function asegurarBase() {
 }
 
 const GRUPOS_NAV = {
-  vender: [['vender', '🛒 Vender'], ['ventas', '📈 Historial'], ['gastos', '🧾 Gastos']],
+  vender: [['vender', '🛒 Vender'], ['ventas', '📈 Historial'], ['gastos', '🧾 Gastos'], ['facturas', '📎 Facturas']],
   inventario: [['inventario', '📦 Inventario'], ['ordeno', '🥛 Ordeño'], ['productos', '🧀 Productos y ganancia']],
+  terneras: [['terneras', '🐄 Terneras'], ['inversion', '💰 Inversión terneras']],
   caja: [['caja', '💰 Caja'], ['balance', '📊 Balance']]
 };
 function grupoNav(v) {
+  if (v === 'animal') return (animalPor(S.aid) || {}).tipo === 'ternera' ? 'terneras' : 'animales';
+  if (v === 'inversion') return 'terneras';
   const ks = Object.keys(GRUPOS_NAV);
   for (let i = 0; i < ks.length; i++) if (GRUPOS_NAV[ks[i]].some(function (x) { return x[0] === v; })) return ks[i];
   return v;
@@ -1956,7 +2001,8 @@ function grupoNav(v) {
 function barraSub() {
   const g = GRUPOS_NAV[grupoNav(S.vista)];
   if (!g) return '';
-  return '<div class="sub">' + g.map(function (x) { return '<button class="' + (S.vista === x[0] ? 'on' : '') + '" data-act="ir" data-v="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div>';
+  const act = S.vista === 'animal' ? ((animalPor(S.aid) || {}).tipo === 'ternera' ? 'terneras' : 'animales') : S.vista;
+  return '<div class="sub">' + g.map(function (x) { return '<button class="' + (act === x[0] ? 'on' : '') + '" data-act="ir" data-v="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div>';
 }
 
 const RAPIDOS = [
@@ -1978,18 +2024,18 @@ const RAPIDOS = [
 ];
 function itemPorNombre(n) { return S.d.items.filter(function (x) { return x.activo !== false && norm(x.nombre) === norm(n); })[0]; }
 function gxIniciar() {
-  S.cf = S.cf || { item: '', fp: '', cant: '', costo: '', prov: '', fecha: hoy() };
+  S.cf = S.cf || { item: '', fp: '', cant: '', costo: '', pu: '', prov: '', nota: '', fecha: hoy() };
   S.gf = S.gf || { desc: '', cat: 'Otros', valor: '', tipo: 'variable', fecha: hoy() };
   S.gs = S.gs || { sel: '', tipo: 'gasto' };
-  if (!PY.gasto) pyIniciar('gasto', function () { return S.gs.tipo === 'compra' ? pm(S.cf.costo) : pm(S.gf.valor); }, ['mixto', 'fuera']);
+  if (!PY.gasto) pyIniciar('gasto', function () { return S.gs.tipo === 'compra' ? pm(S.cf.costo) : pm(S.gf.valor); }, ['mixto', 'fiado', 'fuera']);
 }
 function pagoTxt(r, v) {
   if (r.hist) return 'del Excel';
   if (r.fuera) return 'fuera de la caja';
-  const p = pagosGasto(r, v);
-  if (!p.length) return '';
+  const p = pagosGasto(r, v).concat(r.abonos || []);
+  if (!p.length) return r.deuda ? 'sin anticipo' : '';
   const nombres = p.map(function (x) { return medioNombre(x.medio); }).join(' + ');
-  return nombres + (r.pagos && r.pagos.length && valorCaja(r, v) < v - 0.5 ? ' (el resto por fuera)' : '');
+  return nombres + (!r.deuda && r.pagos && r.pagos.length && valorCaja(r, v) < v - 0.5 ? ' (el resto por fuera)' : '');
 }
 ACT.gxsel = function (b) {
   gxIniciar();
@@ -2018,7 +2064,8 @@ function formGx() {
     const fp = [['1', 'por ' + x.unidad + ' (unidad base)']].concat((x.cp || []).map(function (p) { return [String(p.f), p.n + ' (' + qty(p.f, x.unidad) + ')']; }));
     form = '<label>¿Qué compraste?</label>' + (bloqueado ? '<div class="aviso"><b>' + h(x.emoji) + ' ' + h(x.nombre) + '</b> · los bultos entran al inventario y su costo cuenta en el costo de la leche.</div>' : itemsSel('cfItem', S.cf.item, null, 'data-cf="item"')) +
       '<div class="grid2"><div><label>Comprado en</label><select data-cf="fp">' + opts(fp, S.cf.fp || '1') + '</select></div><div><label>Cantidad</label><input inputmode="decimal" data-cf="cant" value="' + h(S.cf.cant) + '" placeholder="Ej: 2 bultos"></div></div>' +
-      '<div class="grid2"><div><label>Costo total ($)</label><input inputmode="numeric" data-cf="costo" value="' + h(S.cf.costo) + '" placeholder="Ej: 120.000"></div><div><label>Proveedor</label><input data-cf="prov" value="' + h(S.cf.prov) + '" placeholder="Opcional"></div></div>' +
+      '<div class="grid2"><div><label>Precio de cada ' + h(nomForma(x)) + ' ($)</label><input id="cfPu" inputmode="numeric" data-cf="pu" value="' + h(S.cf.pu) + '" placeholder="Ej: 72.000"></div><div><label>Costo total ($)</label><input id="cfCosto" inputmode="numeric" data-cf="costo" value="' + h(S.cf.costo) + '" placeholder="Ej: 360.000"></div></div>' +
+      '<div class="grid2"><div><label>Proveedor</label><input data-cf="prov" value="' + h(S.cf.prov) + '" placeholder="Opcional"></div><div><label>Descripción (opcional)</label><input data-cf="nota" value="' + h(S.cf.nota || '') + '" placeholder="Ej: 5 bultos, anticipo"></div></div><button class="btn mini sec" data-act="nuevoitem" data-t="insumo">➕ ¿No está en la lista? Crear producto o insumo</button>' +
       '<div class="aviso" id="cfInfo">' + infoCompra() + '</div><label>Fecha</label><input type="date" data-cf="fecha" value="' + h(S.cf.fecha) + '">';
   } else {
     const cats = d.cfg.gastoCats.concat(d.cfg.catInversion);
@@ -2028,6 +2075,7 @@ function formGx() {
   }
   const hist = ed && ed.orig && ed.orig.hist;
   return '<div class="card"><h2 class="serif">' + (ed ? '✏️ Corregir registro' : '➕ Nuevo registro') + '</h2>' + form +
+    adjUI('gx', '📎 Adjuntar factura (foto o PDF, opcional)') + (ed ? '' : '') +
     '<h3 style="margin-top:10px">¿De dónde sacaste la plata?</h3>' + (hist ? '<div class="aviso">Este dato vino de tu Excel y ya está contado en la caja. Puedes corregir lo demás.</div>' : pyHtml('gasto')) +
     '<div class="row" style="margin-top:10px"><button class="btn full grow" data-act="guardargx">💾 ' + (ed ? 'Guardar cambios' : (esC ? 'Guardar compra (entra al inventario)' : 'Guardar gasto')) + '</button>' + (ed ? '<button class="btn sec" data-act="cancelgx">Cancelar</button>' : '') + '</div></div>';
 }
@@ -2042,7 +2090,7 @@ ACT.guardargx = async function (b) {
     if (!x) return toast('Escoge qué compraste.', 'err');
     if (!(c > 0)) return toast('Escribe la cantidad.', 'err');
     if (!(v > 0)) return toast('Escribe el costo total.', 'err');
-    rec = { fecha: S.cf.fecha || hoy(), item: x.id, nombre: x.nombre, cant: c, unidad: x.unidad, costo: v, proveedor: S.cf.prov };
+    rec = { fecha: S.cf.fecha || hoy(), item: x.id, nombre: x.nombre, cant: c, unidad: x.unidad, costo: v, proveedor: S.cf.prov, nota: (S.cf.nota || '').trim() };
   } else {
     const v = pm(S.gf.valor);
     if (!S.gf.desc.trim()) return toast('Escribe en qué se gastó.', 'err');
@@ -2052,16 +2100,19 @@ ACT.guardargx = async function (b) {
   if (!hist) {
     R = pyResultado('gasto');
     if (R.err) return toast(R.err, 'err');
+    rec.deuda = !!R.deuda; if (R.deuda) rec.acreedor = esC ? (rec.proveedor || rec.nombre) : rec.desc;
     rec.pagos = R.pagos; rec.fuera = !!R.fuera; rec.medio = R.pagos.length === 1 ? R.pagos[0].medio : '';
   }
   if (ed) rec = Object.assign({}, ed.orig, rec);
   const antes = textosAlertas();
   b.disabled = true;
   try {
-    await guardarReg(esC ? 'compras' : 'gastos', rec);
+    const subidos = await adjSubir('gx');
+    const guardado = await guardarReg(esC ? 'compras' : 'gastos', rec);
+    if (subidos.length) await guardarReg('facturas', { fecha: rec.fecha, proveedor: esC ? (rec.proveedor || rec.nombre) : rec.desc, valor: esC ? rec.costo : rec.valor, nota: esC ? 'Compra de ' + rec.nombre : 'Gasto: ' + rec.desc, adj: subidos, ref: { t: esC ? 'compras' : 'gastos', id: guardado.id } });
     const eraEd = !!ed;
     S.gx = null; PY.gasto = null;
-    if (esC) { S.cf.cant = ''; S.cf.costo = ''; S.cf.prov = ''; } else {
+    if (esC) { S.cf.cant = ''; S.cf.costo = ''; S.cf.pu = ''; S.cf.prov = ''; S.cf.nota = ''; } else {
       S.gf.valor = '';
       const q = S.gs.sel ? RAPIDOS[+S.gs.sel.split('-')[0]].l[+S.gs.sel.split('-')[1]] : null;
       if (eraEd || !q || q.libre) S.gf.desc = '';
@@ -2076,11 +2127,12 @@ ACT.editgx = function (b) {
   const esC = t === 'compras', v = esC ? +r.costo || 0 : +r.valor || 0;
   S.gx = { t: t, id: r.id, orig: r };
   S.gs = { sel: '', tipo: esC ? 'compra' : 'gasto' };
-  if (esC) { S.cf = { item: r.item, fp: '1', cant: numTxt(r.cant), costo: fmtN.format(v), prov: r.proveedor || '', fecha: r.fecha }; }
+  if (esC) { S.cf = { item: r.item, fp: '1', cant: numTxt(r.cant), costo: fmtN.format(v), pu: r.cant > 0 ? fmtN.format(Math.round(v / r.cant)) : '', prov: r.proveedor || '', nota: r.nota || '', fecha: r.fecha }; }
   else { S.gf = { desc: r.desc, cat: r.cat, valor: fmtN.format(v), tipo: tipoGasto(r), fecha: r.fecha }; }
-  pyIniciar('gasto', function () { return S.gs.tipo === 'compra' ? pm(S.cf.costo) : pm(S.gf.valor); }, ['mixto', 'fuera']);
+  pyIniciar('gasto', function () { return S.gs.tipo === 'compra' ? pm(S.cf.costo) : pm(S.gf.valor); }, ['mixto', 'fiado', 'fuera']);
   const w = PY.gasto;
   if (r.hist) w.modo = 'hist';
+  else if (r.deuda) { w.modo = 'fiado'; (r.pagos || []).forEach(function (p) { w.vals[p.medio] = fmtN.format(Math.round((pm(w.vals[p.medio]) || 0) + (+p.valor || 0))); }); }
   else if (r.fuera) w.modo = 'fuera';
   else {
     const ps = pagosGasto(r, v), mk = {}; ps.forEach(function (p) { mk[p.medio] = (mk[p.medio] || 0) + (+p.valor || 0); });
@@ -2104,7 +2156,7 @@ VISTAS.gastos = function () {
   }).join('');
   const pref = calPref('gastos'), ft = S.gtipo || '';
   const ev = [];
-  d.reg.compras.forEach(function (r) { ev.push({ f: r.fecha, ts: r.ts, t: 'compras', id: r.id, v: +r.costo || 0, tipo: tipoCompra(r), cat: 'Compras para el inventario', r: r, txt: '🛍️ ' + r.nombre + ' · ' + qty(r.cant, r.unidad) + (r.proveedor ? ' · ' + r.proveedor : '') }); });
+  d.reg.compras.forEach(function (r) { ev.push({ f: r.fecha, ts: r.ts, t: 'compras', id: r.id, v: +r.costo || 0, tipo: tipoCompra(r), cat: 'Compras para el inventario', r: r, txt: '🛍️ ' + r.nombre + ' · ' + qty(r.cant, r.unidad) + (r.proveedor ? ' · ' + r.proveedor : '') + (r.nota ? ' · ' + r.nota : '') }); });
   d.reg.gastos.forEach(function (r) { ev.push({ f: r.fecha, ts: r.ts, t: 'gastos', id: r.id, v: +r.valor || 0, tipo: tipoGasto(r), cat: r.cat || 'Otros', r: r, txt: '🧾 ' + r.desc + ' · ' + r.cat }); });
   ev.sort(function (a, b) { return a.f < b.f ? 1 : a.f > b.f ? -1 : (b.ts || 0) - (a.ts || 0); });
   const enPer = ev.filter(function (e) { return !pref || String(e.f).indexOf(pref) === 0; });
@@ -2121,9 +2173,10 @@ VISTAS.gastos = function () {
     '<div class="chips">' + tipos.map(function (t) { return '<button class="chip ' + (ft === t[0] ? 'on' : '') + '" data-act="gtipo" data-v="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div>' +
     Object.keys(pc).sort(function (a, b) { return pc[b] - pc[a]; }).map(function (c) { return '<div class="linea"><div class="nm">' + h(c) + '</div><b class="num">' + money(pc[c]) + '</b></div>'; }).join('') +
     '<div class="linea tot"><div class="nm"><b>Total ' + (ft ? 'de ' + h(tipos.filter(function (t) { return t[0] === ft; })[0][1].toLowerCase()) : 'gastado') + '</b></div><b class="num serif" style="font-size:20px">' + money(tot) + '</b></div></div>';
-  return '<div class="titulo serif">🧾 Gastos y compras</div>' + (S.gx ? '' : chips) + (S.gs.sel || S.gx ? formGx() : '<div class="aviso">👆 Escoge qué estás pagando para abrir el formulario.</div>') +
+  return '<div class="titulo serif">🧾 Gastos y compras</div>' + cuentasPorPagar() + (S.gx ? '' : chips) + (S.gs.sel || S.gx ? formGx() : '<div class="aviso">👆 Escoge qué estás pagando para abrir el formulario.</div>') +
     resumen + '<div class="card"><h2 class="serif">Registros · ' + h(calTexto('gastos')) + '</h2>' + (fil.slice(0, 300).map(function (e) {
-      return '<div class="linea" style="align-items:flex-start"><div class="nm">' + h(e.txt) + '<small>' + fechaTxt(e.f) + ' · ' + etiqueta[e.tipo] + ' · ' + h(pagoTxt(e.r, e.v)) + '</small></div><b class="num">' + money(e.v) + '</b><div style="display:flex;flex-direction:column;gap:4px"><button class="btn mini sec" data-act="editgx" data-t="' + e.t + '" data-id="' + h(e.id) + '">✏️</button>' + (esSup() ? '<button class="btn mini sec" data-act="borrar" data-t="' + e.t + '" data-id="' + h(e.id) + '">🗑️</button>' : '') + '</div></div>';
+      const pend = pendienteGasto(e.r, e.v);
+      return '<div class="linea" style="align-items:flex-start"><div class="nm">' + h(e.txt) + '<small>' + fechaTxt(e.f) + ' · ' + etiqueta[e.tipo] + ' · ' + h(pagoTxt(e.r, e.v)) + (e.r.deuda ? (pend > 0.5 ? ' · <b style="color:#C41212">Debo ' + money(pend) + '</b>' : ' · ✅ ya pagado') : '') + (facturaDe(e.t, e.id).length ? ' · <a href="' + h(facturaDe(e.t, e.id)[0].adj && facturaDe(e.t, e.id)[0].adj[0] ? facturaDe(e.t, e.id)[0].adj[0].url : '#') + '" target="_blank" rel="noopener">📎 factura</a>' : '') + '</small></div><b class="num">' + money(e.v) + '</b><div style="display:flex;flex-direction:column;gap:4px"><button class="btn mini sec" data-act="editgx" data-t="' + e.t + '" data-id="' + h(e.id) + '">✏️</button>' + (esSup() ? '<button class="btn mini sec" data-act="borrar" data-t="' + e.t + '" data-id="' + h(e.id) + '">🗑️</button>' : '') + '</div></div>';
     }).join('') || '<div class="vacio">No hay registros en este periodo.</div>') + (fil.length > 300 ? '<p class="small muted">Mostrando 300 de ' + fil.length + '. Escoge un mes o un día.</p>' : '') + '</div>';
 };
 ACT.gtipo = function (b) { S.gtipo = b.dataset.v; render(); };
@@ -2186,30 +2239,31 @@ function ratioVariable(mes) {
 function diasMes(mes) { const p = mes.split('-'); return new Date(+p[0], +p[1], 0).getDate(); }
 VISTAS.inicio = function () {
   const d = S.d, f = hoy(), s = saldos(), mes = mesesInforme();
-  const I = informeMes(mes), rv = ratioVariable(mes), margen = 1 - rv.r;
+  const I = informeMes(mes), rv = ratioVariable(mes), margen = 1 - rv.r, M = metaFijos(I);
   const ventasHoy = sumaDia(d.reg.ventas, f, 'total'), litros = sumaDia(d.reg.ordeno, f, 'litros');
   const totalDin = Object.keys(s).reduce(function (a, k) { return a + s[k]; }, 0);
   const debenCli = d.reg.ventas.reduce(function (a, v) { return a + deudaVenta(v); }, 0);
+  const debo = deudasProv().reduce(function (a, x) { return a + x.pend; }, 0);
   const debenPre = d.reg.prestamos.reduce(function (a, r) { return a + pendPrestamo(r); }, 0);
-  const meta = margen > 0 ? I.fijos / margen : 0, falta = Math.max(0, meta - I.ventas), cumple = meta > 0 ? Math.min(100, I.ventas / meta * 100) : 0;
+  const meta = margen > 0 ? M.total / margen : 0, falta = Math.max(0, meta - I.ventas), cumple = meta > 0 ? Math.min(100, I.ventas / meta * 100) : 0;
   const esActual = mes === f.slice(0, 7), dm = diasMes(mes), dh = esActual ? +f.slice(8) : dm, restan = esActual ? Math.max(1, dm - dh + 1) : 0;
   const proy = dh > 0 ? I.ventas / dh * dm : 0;
   let aporte = I.ventas * margen;
-  const partes = [['🐐 Alimentar a las cabras (concentrado, sal, veterinario)', I.cabras], ['👷 Pagar al trabajador', I.trab], ['🏡 Arriendo, agua y energía', I.lugar], ['📌 Otros gastos fijos', I.otrosFijos]].filter(function (p) { return p[1] > 0; });
+  const partes = [['🐐 Alimentar a las cabras (concentrado, sal, veterinario)', M.cabras, I.cabras], ['👷 Sueldos y mano de obra', M.trab, I.trab], ['🏡 Arriendo, agua y energía', M.lugar, I.lugar], ['📌 Gastos de producción y otros fijos', M.otrosFijos, I.otrosFijos]].filter(function (p) { return p[1] > 0; });
   const filas = partes.map(function (p) {
     const cub = p[1] > 0 ? Math.min(1, aporte / p[1]) : 1; aporte = Math.max(0, aporte - p[1]);
-    return '<div style="margin-bottom:10px"><div class="row" style="flex-wrap:nowrap"><div class="grow"><b>' + p[0] + '</b><br><span class="small muted">Gasto del mes ' + money(p[1]) + ' · ' + pct(I.fijos > 0 ? p[1] / I.fijos * 100 : 0) + ' de lo fijo · hay que vender ' + money(margen > 0 ? p[1] / margen : 0) + '</span></div><span class="tag ' + (cub >= 1 ? 'ok' : 'bajo') + '">' + (cub >= 1 ? '✅ cubierto' : Math.round(cub * 100) + '%') + '</span></div><div class="bar2 ' + (cub >= 1 ? 'vv' : '') + '"><i style="width:' + Math.round(cub * 100) + '%"></i></div></div>';
+    return '<div style="margin-bottom:10px"><div class="row" style="flex-wrap:nowrap"><div class="grow"><b>' + p[0] + '</b><br><span class="small muted">Meta ' + money(p[1]) + ' · gastado ' + money(p[2]) + ' · ' + pct(M.total > 0 ? p[1] / M.total * 100 : 0) + ' de lo fijo · hay que vender ' + money(margen > 0 ? p[1] / margen : 0) + '</span></div><span class="tag ' + (cub >= 1 ? 'ok' : 'bajo') + '">' + (cub >= 1 ? '✅ cubierto' : Math.round(cub * 100) + '%') + '</span></div><div class="bar2 ' + (cub >= 1 ? 'vv' : '') + '"><i style="width:' + Math.round(cub * 100) + '%"></i></div></div>';
   }).join('');
   const resultado = I.ventas - I.fijos - I.variables;
-  const al = alertas();
+  const al = alertas().concat(alertasAnimales());
   let h1 = '<div class="card"><h2 class="serif">¡Hola, ' + h(S.yo.nombre) + '! 👋</h2><div class="row">' +
     '<button class="btn" data-act="ir" data-v="vender">🛒 Vender</button><button class="btn sol" data-act="ir" data-v="ordeno">🥛 Ordeñé</button>' +
     '<button class="btn sec" data-act="ir" data-v="gastos">🧾 Gasto o compra</button><button class="btn sec" data-act="producir">🧀 Producir</button></div></div>';
   h1 += '<div class="kpis"><div class="kpi v"><small>Vendido hoy</small><b>' + money(ventasHoy) + '</b></div><div class="kpi"><small>Leche ordeñada hoy</small><b>' + qty(litros, 'L') + '</b></div><div class="kpi n"><small>Me deben los clientes</small><b>' + money(debenCli) + '</b></div></div>';
   h1 += '<div class="card"><h2 class="serif">📊 Informe del mes</h2><div class="row" style="flex-wrap:nowrap"><button class="btn mini sec" data-act="infnav" data-d="-1">◀</button><input type="month" class="grow" data-ch="infmes" value="' + h(mes) + '"><button class="btn mini sec" data-act="infnav" data-d="1">▶</button></div>' +
     '<div class="kpis" style="margin-top:10px"><div class="kpi v"><small>Vendido en ' + h(mesTxt(mes).split(' ')[0].toLowerCase()) + '</small><b>' + money(I.ventas) + '</b></div><div class="kpi n"><small>Gastos fijos</small><b>' + money(I.fijos) + '</b></div><div class="kpi"><small>Gastos variables</small><b>' + money(I.variables) + '</b></div><div class="kpi ' + (resultado >= 0 ? 'v' : 'r') + '"><small>Queda (ventas − gastos)</small><b>' + money(resultado) + '</b></div></div>' +
-    '<h3 class="serif" style="margin-top:6px">🎯 ¿Cuánto debo vender este mes?</h3>' +
-    (I.fijos > 0 ? '<p style="margin:4px 0">Para cubrir los gastos fijos de <b>' + money(I.fijos) + '</b> necesitas vender <b style="font-size:20px;color:var(--naranja2)">' + money(meta) + '</b>.</p><p class="small muted" style="margin:0 0 6px">De cada $100 que vendes, unos $' + Math.round(rv.r * 100) + ' se van en insumos y empaques (' + rv.de + '), y $' + Math.round(margen * 100) + ' quedan para pagar lo fijo.</p>' +
+    '<h3 class="serif" style="margin-top:6px">🎯 ¿Cuánto debo vender este mes?</h3><button class="btn mini sec" data-act="editmetas">✏️ Editar mis gastos fijos y metas</button>' +
+    (M.total > 0 ? '<p style="margin:4px 0">Para cubrir los gastos fijos de <b>' + money(M.total) + '</b>' + (M.usa ? ' (los que tú definiste)' : '') + ' necesitas vender <b style="font-size:20px;color:var(--naranja2)">' + money(meta) + '</b>.</p><p class="small muted" style="margin:0 0 6px">De cada $100 que vendes, unos $' + Math.round(rv.r * 100) + ' se van en insumos y empaques (' + rv.de + '), y $' + Math.round(margen * 100) + ' quedan para pagar lo fijo.</p>' +
       '<div class="bar2 ' + (cumple >= 100 ? 'vv' : '') + '"><i style="width:' + Math.round(cumple) + '%"></i></div><p class="small" style="margin:2px 0 6px"><b>' + Math.round(cumple) + '%</b> de la meta · ' + (falta > 0 ? 'faltan <b>' + money(falta) + '</b>' + (esActual ? ' (unos <b>' + money(falta / restan) + '</b> por día los ' + restan + ' días que quedan)' : '') : '✅ ¡Ya cubriste todo lo fijo!') + '</p>' +
       (esActual && I.ventas > 0 ? '<p class="small muted">Al ritmo de ahora venderías unos ' + money(proy) + ' este mes' + (proy >= meta ? ' ✅ alcanza.' : ' (te faltarían ' + money(meta - proy) + ').') + '</p>' : '') +
       '<h3 class="serif" style="margin-top:10px">¿Con qué se paga cada cosa?</h3><p class="small muted" style="margin-top:0">Lo vendido ayuda a pagar primero a las cabras, luego al trabajador y luego el lugar.</p>' + filas
@@ -2220,6 +2274,7 @@ VISTAS.inicio = function () {
   }).join('') + '<div class="linea"><div class="nm">Plata en mano</div><b class="num">' + money(totalDin) + '</b></div>' +
     '<div class="linea"><span style="font-size:24px">📒</span><div class="nm">Me deben los clientes</div><b class="num">' + money(debenCli) + '</b></div>' +
     '<div class="linea"><span style="font-size:24px">🤝</span><div class="nm">Me deben por préstamos</div><b class="num">' + money(debenPre) + '</b></div>' +
+    (debo > 0.5 ? '<div class="linea" data-act="ir" data-v="gastos" style="cursor:pointer"><span style="font-size:24px">🧾</span><div class="nm">Debo a proveedores<small>toca para ver y pagar</small></div><b class="num" style="color:var(--rojo,#C41212)">' + money(debo) + '</b></div>' : '') +
     '<div class="linea tot"><div class="nm"><b>Total (plata + lo que me deben)</b></div><b class="num serif" style="font-size:20px">' + money(totalDin + debenCli + debenPre) + '</b></div></div>';
   h1 += '<div class="card"><h2 class="serif">📣 Avisos</h2>' + (al.length ? al.map(function (a) { return '<div class="alerta ' + a.t + '">' + h(a.txt) + '</div>'; }).join('') : '<div class="vacio">Todo en orden. No hay avisos por ahora. 🌿</div>') + '</div>';
   return h1;
@@ -2331,15 +2386,1016 @@ VISTAS.productos = function () {
 };
 ACT.subprod = function (b) { S.sub.prod = b.dataset.v; render(); };
 
-const NAVS = [['inicio', '🏠', 'Inicio'], ['vender', '🛒', 'Ventas'], ['inventario', '📦', 'Inventario'], ['caja', '💰', 'Caja'], ['ajustes', '⚙️', 'Ajustes']];
+const SL2 = '/' + '/';
+const GESTACION = 150;
+const EVT = {
+  peso: ['⚖️', 'Peso'], vacuna: ['💉', 'Vacuna'], medicamento: ['💊', 'Medicamento o inyección'], desparasitacion: ['🪱', 'Desparasitación'], bano: ['🛁', 'Baño'],
+  etapa: ['🏷️', 'Cambio de etapa'], gastoAnimal: ['💵', 'Gasto en este animal'], litros: ['🥛', 'Litros de leche'], alimentacion: ['🌾', 'Alimentación'], monta: ['🐐', 'Monta'], chequeo: ['🔍', 'Chequeo de preñez'], parto: ['🍼', 'Parto'], venta: ['💰', 'Venta'], nota: ['📝', 'Nota']
+};
+
+function sumarDias(f, n) {
+  const d = new Date(f + 'T12:00:00'); d.setDate(d.getDate() + n);
+  return d.getFullYear() + '-' + (d.getMonth() + 1 < 10 ? '0' : '') + (d.getMonth() + 1) + '-' + (d.getDate() < 10 ? '0' : '') + d.getDate();
+}
+function difDias(a, b) { return Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 86400000); }
+function animales() { return S.d.reg.animales || []; }
+function animalPor(id) { return animales().filter(function (a) { return a.id === id; })[0]; }
+function animalNombre(n) { return animales().filter(function (a) { return norm(a.nombre) === norm(n); })[0]; }
+function eventosDe(id) {
+  return (S.d.reg.eventosAnimal || []).filter(function (e) { return e.animal === id; }).sort(function (a, b) { return a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : (a.ts || 0) - (b.ts || 0); });
+}
+function edadTxt(a) {
+  if (a.nacimiento) {
+    const p = a.nacimiento.split('-'), h0 = hoy().split('-');
+    let m = (+h0[0] - +p[0]) * 12 + (+h0[1] - +p[1]); if (+h0[2] < +p[2]) m--;
+    if (m < 0) return 'Fecha de nacimiento futura';
+    if (m < 1) return 'Recién nacida';
+    const y = Math.floor(m / 12), r = m % 12;
+    return (y ? y + (y === 1 ? ' año' : ' años') : '') + (y && r ? ' y ' : '') + (r ? r + (r === 1 ? ' mes' : ' meses') : '');
+  }
+  return a.edadAprox ? a.edadAprox + ' (aprox.)' : 'Edad sin registrar';
+}
+function edadMeses(a) {
+  if (a.nacimiento) { const p = a.nacimiento.split('-'), h0 = hoy().split('-'); return (+h0[0] - +p[0]) * 12 + (+h0[1] - +p[1]); }
+  return 24;
+}
+function pesoActual(a) {
+  const ps = eventosDe(a.id).filter(function (e) { return e.tipo === 'peso' && +e.kg > 0; });
+  if (ps.length) return { kg: +ps[ps.length - 1].kg, fecha: ps[ps.length - 1].fecha };
+  if (+a.pesoIni > 0) return { kg: +a.pesoIni, fecha: a.nacimiento || '' };
+  return null;
+}
+function litrosProm(a) {
+  const ls = eventosDe(a.id).filter(function (e) { return e.tipo === 'litros' && +e.litros > 0; }).slice(-5);
+  if (!ls.length) return 0;
+  if (ls[ls.length - 1].fecha < sumarDias(hoy(), -20)) return 0;
+  return ls.reduce(function (s, e) { return s + (+e.litros || 0); }, 0) / ls.length;
+}
+function estadoRepro(a, fx) {
+  if (a.sexo !== 'hembra') return null;
+  let st = { prenada: false };
+  eventosDe(a.id).filter(function (e) { return (e.tipo === 'monta' || e.tipo === 'parto' || e.tipo === 'chequeo') && (!fx || e.fecha <= fx); }).forEach(function (e) {
+    if (e.tipo === 'monta') st = { prenada: true, monta: e.fecha, macho: e.machoNombre || '', confirmada: false };
+    else if (e.tipo === 'chequeo') { if (st.prenada) { if (e.resultado === 'vacia') st = { prenada: false, vacia: e.fecha }; else st.confirmada = true; } }
+    else st = { prenada: false, ultimoParto: e.fecha };
+  });
+  if (st.prenada) { st.parto = sumarDias(st.monta, GESTACION); st.desde = sumarDias(st.monta, GESTACION - 5); st.hasta = sumarDias(st.monta, GESTACION + 5); st.dias = difDias(fx || hoy(), st.parto); }
+  return st;
+}
+function estadoTxt(a) {
+  if (a.estado === 'vendido') return '<span class="tag sin">Vendida</span>';
+  if (a.estado === 'muerto') return '<span class="tag bajo">Ya no está</span>';
+  const r = estadoRepro(a);
+  if (!r) return a.sexo === 'macho' ? '<span class="tag ok">Reproductor</span>' : '';
+  if (r.prenada) return '<span class="tag ' + (r.dias <= 30 ? 'bajo' : 'ok') + '">🤰 Preñada · ' + (r.dias >= 0 ? 'faltan ' + r.dias + ' d' : 'pasó la fecha') + '</span>';
+  return '<span class="tag sin">Vacía</span>';
+}
+
+function racionCalc(a) {
+  const eti = etapaInfo(a);
+  const p = pesoActual(a);
+  if (!p) return null;
+  const kg = p.kg, rp = estadoRepro(a), L = litrosProm(a), meses = edadMeses(a);
+  let tipo, conc, ms, nota;
+  if (a.sexo === 'macho' && meses >= 12) { tipo = 'Macho reproductor'; conc = kg * 0.005; ms = 0.03; nota = 'Sube un poco el concentrado en época de montas.'; }
+  else if (meses < 12 || a.tipo === 'ternera') { tipo = 'Cría o ternera en crecimiento'; conc = Math.min(0.6, Math.max(0.2, kg * 0.01)); ms = 0.035; nota = 'Necesita buen pasto y agua limpia siempre.'; }
+  else if (L > 0) { tipo = 'Cabra dando leche (' + numTxt(Math.round(L * 10) / 10) + ' L al día)'; conc = Math.min(2.2, 0.3 + 0.4 * L); ms = 0.04; nota = '0,3 kg para mantenerse y 0,4 kg por cada litro de leche.'; }
+  else if (rp && rp.prenada && rp.dias <= 30) { tipo = 'Preparto (último mes de gestación)'; conc = 0.6; ms = 0.035; nota = 'Va con el concentrado de terneras y preparto.'; }
+  else { tipo = 'Cabra seca o vacía'; conc = Math.max(0.2, kg * 0.005); ms = 0.035; nota = 'Mantenimiento: no necesita mucho concentrado.'; }
+  if (eti) { conc = eti.g / 1000; tipo = eti.nombre + (L > 0 ? ' (' + numTxt(Math.round(L * 10) / 10) + ' L al día)' : ''); nota = 'La cantidad de concentrado sale de la tabla de Raciones por etapa (puedes cambiarla ahí).'; }
+  const msTotal = kg * ms, msForraje = Math.max(0, msTotal - conc * 0.88);
+  const lecho = eti ? eti.item === 'l' : tipo.indexOf('dando leche') >= 0, item = itemPorNombre(lecho ? 'Concentrado lechero' : 'Concentrado terneras y preparto');
+  const pk = item && S.c.st[item.id] && S.c.st[item.id].ult > 0 ? S.c.st[item.id].ult : 0;
+  return { tipo: tipo, kg: kg, conc: conc, concNombre: lecho ? 'concentrado lechero' : 'concentrado de terneras y preparto', pasto: msForraje / 0.22, heno: msForraje / 0.88, agua: kg * 0.1 + 1.5 * L, sal: meses < 12 ? 8 : 12, costo: conc * pk, pk: pk, nota: nota, ms: ms * 100 };
+}
+
+function avatar(a, tam) {
+  const f = (a.adj || []).filter(function (x) { return x.foto; }).slice(-1)[0];
+  const em = a.tipo === 'ternera' ? '🐄' : '🐐';
+  return '<span class="av" style="width:' + tam + 'px;height:' + tam + 'px;font-size:' + Math.round(tam * 0.62) + 'px">' + (f ? '<img src="' + h(thumbUrl(f)) + '" alt="" onerror="this.remove()">' : '') + '<i>' + em + '</i></span>';
+}
+function thumbUrl(f) { return 'https:' + SL2 + 'drive.google.com/thumbnail?id=' + f.id + '&sz=w400'; }
+
+async function asegurarAnimales() {
+  if (!S.d || S.d.cfg.animalesOk || !esSup()) return;
+  if (animales().length) return;
+  try {
+    const nombres = [['Ofelia', 'cabra', 'hembra'], ['Otilia', 'cabra', 'hembra'], ['Tomasa', 'cabra', 'hembra'], ['Melliza', 'cabra', 'hembra'], ['Tetimocha', 'cabra', 'hembra'], ['Raya', 'cabra', 'hembra'], ['Carmela', 'cabra', 'hembra'], ['Pacho', 'cabra', 'macho'], ['Rigo', 'cabra', 'macho'], ['Julieta', 'cabra', 'hembra'], ['Simona', 'ternera', 'hembra'], ['Mona', 'ternera', 'hembra'], ['Huesos', 'ternera', 'hembra']];
+    const lista = nombres.map(function (n) { return { nombre: n[0], tipo: n[1], sexo: n[2], estado: 'activo', origen: '', madre: '', padre: '', nota: '' }; });
+    await call('guardarVarios', 'animales', JSON.stringify(lista));
+    const cfg = JSON.parse(JSON.stringify(S.d.cfg)); cfg.animalesOk = hoy();
+    await call('guardarConfig', JSON.stringify(cfg));
+    await cargar();
+  } catch (e) { }
+}
+async function asegurarTodo() { await asegurarBase(); await asegurarAnimales(); }
+
+function vistaLista(tipo) {
+  const act = animales().filter(function (a) { return a.tipo === tipo && a.estado !== 'vendido' && a.estado !== 'muerto'; });
+  const baj = animales().filter(function (a) { return a.tipo === tipo && (a.estado === 'vendido' || a.estado === 'muerto'); });
+  const fila = function (a) {
+    const p = pesoActual(a), l = litrosProm(a);
+    return '<div class="linea" data-act="abriranimal" data-id="' + h(a.id) + '" style="cursor:pointer">' + avatar(a, 52) + '<div class="nm"><b style="font-size:18px">' + h(a.nombre) + '</b><small>' + (a.sexo === 'macho' ? 'Macho' : 'Hembra') + ' · ' + h(edadTxt(a)) + (p ? ' · ' + numTxt(p.kg) + ' kg' : '') + (l > 0 ? ' · ' + numTxt(Math.round(l * 10) / 10) + ' L/día' : '') + '</small></div><div>' + estadoTxt(a) + '</div></div>';
+  };
+  const pre = act.filter(function (a) { const r = estadoRepro(a); return r && r.prenada; });
+  return '<div class="titulo serif">' + (tipo === 'cabra' ? '🐐 Cabras' : '🐄 Terneras') + '</div>' +
+    '<div class="kpis"><div class="kpi v"><small>' + (tipo === 'cabra' ? 'Cabras y reproductores' : 'Terneras') + '</small><b>' + act.length + '</b></div>' + (pre.length ? '<div class="kpi n"><small>Preñadas</small><b>' + pre.length + '</b></div>' : '') + '</div>' +
+    '<button class="btn full" data-act="nuevoanimal" data-t="' + tipo + '">➕ Agregar ' + (tipo === 'cabra' ? 'una cabra o cabro' : 'una ternera') + '</button>' +
+    '<div class="card" style="margin-top:10px;padding:6px 12px">' + (act.map(fila).join('') || '<div class="vacio">Todavía no hay animales aquí.</div>') + '</div>' +
+    (baj.length ? '<div class="card" style="padding:6px 12px"><h3 class="serif" style="margin:6px 0">Vendidos o que ya no están</h3>' + baj.map(fila).join('') + '</div>' : '');
+}
+VISTAS.animales = function () { return vistaLista('cabra'); };
+VISTAS.terneras = function () { return vistaLista('ternera'); };
+ACT.abriranimal = function (b) { S.aid = b.dataset.id; S.vista = 'animal'; render(); window.scrollTo(0, 0); };
+ACT.volveranimales = function () { const a = animalPor(S.aid); S.vista = a && a.tipo === 'ternera' ? 'terneras' : 'animales'; render(); };
+
+function modalAnimal(a, tipoNuevo) {
+  const n = a || { tipo: tipoNuevo || 'cabra', sexo: tipoNuevo === 'ternera' ? 'hembra' : 'hembra', estado: 'activo' };
+  const nombres = animales().map(function (x) { return '<option value="' + h(x.nombre) + '">'; }).join('');
+  modal('<h2>' + (a ? '✏️ Datos de ' + h(a.nombre) : '➕ Nuevo animal') + '</h2><datalist id="dlAn">' + nombres + '</datalist>' +
+    '<label>Nombre</label><input id="anN" value="' + h(n.nombre || '') + '">' +
+    '<div class="grid2"><div><label>Grupo</label><select id="anT">' + opts([['cabra', 'Cabras'], ['ternera', 'Terneras']], n.tipo) + '</select></div><div><label>Sexo</label><select id="anS">' + opts([['hembra', 'Hembra'], ['macho', 'Macho']], n.sexo) + '</select></div></div>' +
+    '<div class="grid2"><div><label>Fecha de nacimiento</label><input type="date" id="anNac" value="' + h(n.nacimiento || '') + '"></div><div><label>O edad aproximada</label><input id="anEd" value="' + h(n.edadAprox || '') + '" placeholder="Ej: 3 años"></div></div>' +
+    '<div class="grid2"><div><label>Peso (kg)</label><input id="anP" inputmode="decimal" value="' + h(n.pesoIni ? numTxt(n.pesoIni) : '') + '" placeholder="Opcional"></div><div><label>Raza o color</label><input id="anR" value="' + h(n.raza || '') + '" placeholder="Ej: Alpina"></div></div>' +
+    '<div class="grid2"><div><label>Mamá</label><input id="anM" list="dlAn" value="' + h(n.madre || '') + '"></div><div><label>Papá</label><input id="anPa" list="dlAn" value="' + h(n.padre || '') + '"></div></div>' +
+    '<label>¿Cómo llegó?</label><select id="anO">' + opts([['', 'Sin decir'], ['nacio', 'Nació aquí'], ['compra', 'La compramos']], n.origen || '') + '</select>' +
+    (a ? '<label>Estado</label><select id="anE">' + opts([['activo', 'Está con nosotros'], ['vendido', 'Se vendió'], ['muerto', 'Ya no está (murió, se perdió)']], n.estado) + '</select>' : '') +
+    '<label>Valor al nacer o costo de compra ($, opcional)</label><input id="anCI" inputmode="numeric" value="' + h(n.costoIni ? fmtN.format(n.costoIni) : '') + '">' +
+    '<label>Notas</label><textarea id="anNo" rows="2">' + h(n.nota || '') + '</textarea>' +
+    '<button class="btn full" style="margin-top:12px" data-act="guardaranimal" data-id="' + h(a ? a.id : '') + '">Guardar</button>');
+}
+ACT.nuevoanimal = function (b) { modalAnimal(null, b.dataset.t); };
+ACT.editaranimal = function () { modalAnimal(animalPor(S.aid)); };
+ACT.guardaranimal = async function (b) {
+  const nom = val('anN').trim(); if (!nom) return toast('Escribe el nombre.', 'err');
+  const id = b.dataset.id, ex = id ? animalPor(id) : null;
+  if (!ex && animalNombre(nom)) return toast('Ya hay un animal con ese nombre.', 'err');
+  const rec = Object.assign({}, ex || {}, { costoIni: pm(val('anCI')) || 0, nombre: nom, tipo: val('anT'), sexo: val('anS'), nacimiento: val('anNac'), edadAprox: val('anEd').trim(), pesoIni: pq(val('anP')) || 0, raza: val('anR').trim(), madre: val('anM').trim(), padre: val('anPa').trim(), origen: val('anO'), nota: val('anNo').trim() });
+  rec.estado = ex ? val('anE') : 'activo';
+  b.disabled = true;
+  try { const r = await guardarReg('animales', rec); cerrarModal(); toast('Guardado ✅', 'ok'); if (!ex) { S.aid = r.id; S.vista = 'animal'; } render(); } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+ACT.borraranimal = async function () {
+  const a = animalPor(S.aid); if (!a) return;
+  if (!(await confirmar('¿Borrar a ' + a.nombre + ' y toda su hoja de vida? No se puede deshacer.', 'Borrar'))) return;
+  try {
+    const evs = eventosDe(a.id);
+    for (let i = 0; i < evs.length; i++) await borrarReg('eventosAnimal', evs[i].id);
+    await borrarReg('animales', a.id); S.vista = a.tipo === 'ternera' ? 'terneras' : 'animales'; toast('Borrado', 'ok'); render();
+  } catch (e) { toast(e.message, 'err'); }
+};
+
+function relTxt(nombre) {
+  if (!nombre) return '—';
+  const a = animalNombre(nombre);
+  return a ? '<a href="#" data-act="abriranimal" data-id="' + h(a.id) + '" style="color:var(--verde);font-weight:800">' + h(nombre) + '</a>' : h(nombre);
+}
+function evResumen(e) {
+  const x = [];
+  if (e.tipo === 'peso') x.push(numTxt(e.kg) + ' kg');
+  if (e.producto) x.push(e.producto);
+  if (e.dosis) x.push('dosis: ' + e.dosis);
+  if (e.tipo === 'litros') x.push(numTxt(e.litros) + ' L');
+  if (e.tipo === 'monta') x.push('con ' + (e.machoNombre || 'cabro sin nombre') + ' · parto aprox. ' + fechaTxt(sumarDias(e.fecha, GESTACION)));
+  if (e.tipo === 'chequeo') x.push(e.resultado === 'vacia' ? 'Está vacía' : 'Preñez confirmada');
+  if (e.tipo === 'alimentacion') { if (+e.conc > 0) x.push(numTxt(e.conc) + ' kg de concentrado'); if (e.forraje) x.push(e.forraje); }
+  if (e.tipo === 'parto') x.push(e.detalle || '');
+  if (e.tipo === 'venta') x.push(e.detalle || '');
+  if (e.tipo === 'etapa') x.push(e.detalle || '');
+  if (e.tipo === 'gastoAnimal') x.push((e.concepto || 'Gasto') + ': ' + money(e.valor));
+  if (e.hora) x.push('a las ' + e.hora);
+  if (e.tipo === 'parto' && e.resultado && e.resultado !== 'normal') x.push(RES_PARTO[e.resultado] || '');
+  if (e.proxima) x.push('próxima: ' + fechaTxt(e.proxima));
+  if (e.nota) x.push(e.nota);
+  return x.filter(Boolean).join(' · ');
+}
+VISTAS.animal = function () {
+  const a = animalPor(S.aid);
+  if (!a) { S.vista = 'animales'; return VISTAS.animales(); }
+  const p = pesoActual(a), l = litrosProm(a), r = estadoRepro(a), rc = racionCalc(a), evs = eventosDe(a.id), vend = a.estado === 'vendido';
+  const kpis = '<div class="kpis"><div class="kpi"><small>Edad</small><b style="font-size:16px">' + h(edadTxt(a)) + '</b></div><div class="kpi n"><small>Peso' + (p && p.fecha ? ' · ' + fechaTxt(p.fecha) : '') + '</small><b>' + (p ? numTxt(p.kg) + ' kg' : '—') + '</b></div>' + (a.sexo === 'hembra' ? '<div class="kpi v"><small>Leche por día</small><b>' + (l > 0 ? numTxt(Math.round(l * 10) / 10) + ' L' : '—') + '</b></div>' : '') + '</div>';
+  const botones = Object.keys(EVT).filter(function (k) { return k !== 'venta' && k !== 'parto' && k !== 'monta' && k !== 'chequeo' && k !== 'litros' && k !== 'etapa' || (a.sexo === 'hembra' && (k === 'litros')); }).map(function (k) {
+    return '<button class="chip" data-act="nuevoevento" data-k="' + k + '">' + EVT[k][0] + ' ' + EVT[k][1] + '</button>';
+  }).join('');
+  const reproBtn = a.sexo === 'hembra' ? '<button class="chip" data-act="nuevoevento" data-k="monta">🐐 Monta</button><button class="chip" data-act="nuevoevento" data-k="chequeo">🔍 Chequeo de preñez</button><button class="chip" data-act="nuevoevento" data-k="parto">🍼 Parto</button>' : '';
+  let repro = '';
+  if (a.sexo === 'hembra') {
+    if (r && r.prenada) {
+      repro = '<div class="aviso big ' + (r.dias <= 30 ? 'masc' : 'okc') + '">🤰 <b>Preñada</b>' + (r.confirmada ? ' (confirmada)' : '') + '<br>La preñó: <b>' + relTxt(r.macho) + '</b> · Monta: ' + fechaTxt(r.monta) + '<br>Parto estimado: <b>' + fechaTxt(r.parto) + '</b> (entre ' + fechaTxt(r.desde) + ' y ' + fechaTxt(r.hasta) + ')<br>' + (r.dias >= 0 ? 'Faltan <b>' + r.dias + ' días</b>.' : 'Ya pasó la fecha estimada por ' + (-r.dias) + ' días.') + (r.dias <= 30 && r.dias >= 0 ? '<br>👉 Ya está en el último mes: pásala a la ración de preparto.' : '') + '</div>';
+    } else repro = '<div class="aviso">' + (r && r.ultimoParto ? 'Último parto: ' + fechaTxt(r.ultimoParto) + '. ' : '') + 'Ahora está <b>vacía</b>. Cuando la monte un cabro, toca "Monta" y te calculo el parto (' + GESTACION + ' días, unos 5 meses).</div>';
+  } else {
+    const montas = (S.d.reg.eventosAnimal || []).filter(function (e) { return e.tipo === 'monta' && norm(e.machoNombre) === norm(a.nombre); }).sort(function (x, y) { return x.fecha < y.fecha ? 1 : -1; });
+    repro = '<div class="aviso">Montas registradas con ' + h(a.nombre) + ': <b>' + montas.length + '</b>' + montas.slice(0, 5).map(function (e) { return '<br>• ' + fechaTxt(e.fecha) + ' · ' + h(e.animalNombre); }).join('') + '</div>';
+  }
+  let rac = '';
+  if (rc) {
+    rac = '<div class="card"><h2 class="serif">🌾 Ración diaria según su peso</h2><p class="small muted" style="margin-top:0">' + h(rc.tipo) + ' · pesa ' + numTxt(rc.kg) + ' kg</p>' +
+      '<div class="linea"><div class="nm">Concentrado (' + h(rc.concNombre) + ')</div><b class="num">' + numTxt(Math.round(rc.conc * 100) / 100) + ' kg</b></div>' +
+      '<div class="linea"><div class="nm">Pasto fresco<small>o si es heno: ' + numTxt(Math.round(rc.heno * 10) / 10) + ' kg</small></div><b class="num">' + numTxt(Math.round(rc.pasto * 10) / 10) + ' kg</b></div>' +
+      '<div class="linea"><div class="nm">Agua limpia</div><b class="num">' + numTxt(Math.round(rc.agua * 10) / 10) + ' L</b></div>' +
+      '<div class="linea"><div class="nm">Sal mineralizada</div><b class="num">' + rc.sal + ' g</b></div>' +
+      (rc.costo > 0 ? '<div class="linea tot"><div class="nm"><b>Costo del concentrado al día</b><small>con tu último precio de compra (' + money(rc.pk) + ' el kilo)</small></div><b class="num">' + money(rc.costo) + '</b></div>' : '') +
+      '<p class="small muted">' + h(rc.nota) + ' Comida total: cerca del ' + numTxt(Math.round(rc.ms * 10) / 10) + '% de su peso en materia seca. Es una guía general: ajústala con tu veterinario o zootecnista. Se recalcula sola cuando registras un peso nuevo.</p>' +
+      '<label>Lo que realmente le estoy dando</label><input id="anRac" value="' + h(a.racionReal || '') + '" placeholder="Ej: 1 kg concentrado + pasto kikuyo + sal">' +
+      '<button class="btn mini sec" data-act="guardarracion" style="margin-top:6px">Guardar</button></div>';
+  } else rac = '<div class="card"><h2 class="serif">🌾 Ración diaria según su peso</h2><div class="aviso">Registra el peso de ' + h(a.nombre) + ' (botón ⚖️ Peso) y te calculo cuánta comida le toca.</div></div>';
+  const lista = evs.slice().reverse().map(function (e) {
+    return '<div class="linea" style="align-items:flex-start"><span style="font-size:22px">' + (EVT[e.tipo] ? EVT[e.tipo][0] : '📝') + '</span><div class="nm"><b>' + h(EVT[e.tipo] ? EVT[e.tipo][1] : e.tipo) + '</b><small>' + fechaTxt(e.fecha) + (e.por ? ' · ' + h(e.por) : '') + '</small><small>' + h(evResumen(e)) + '</small>' + ((e.adj || []).map(function (f) { return '<a class="small" style="color:var(--verde)" target="_blank" rel="noopener" href="' + h(f.url) + '">📎 ' + h(f.nombre) + '</a>'; }).join(' ')) + '</div>' +
+      (e.tipo !== 'venta' ? '<div style="display:flex;flex-direction:column;gap:4px"><button class="btn mini sec" data-act="editarevento" data-id="' + h(e.id) + '">✏️</button><button class="btn mini sec" data-act="borrarevento" data-id="' + h(e.id) + '">🗑️</button></div>' : '') + '</div>';
+  }).join('');
+  const docs = (a.adj || []).map(function (f, i) {
+    return '<div class="linea"><span style="font-size:22px">' + (f.foto ? '📷' : '📄') + '</span><div class="nm"><a target="_blank" rel="noopener" href="' + h(f.url) + '" style="color:var(--verde);font-weight:800">' + h(f.nombre) + '</a><small>' + (f.fecha ? fechaTxt(f.fecha) : '') + '</small></div><button class="btn mini sec" data-act="quitardoc" data-i="' + i + '">🗑️</button></div>';
+  }).join('');
+  const vendInfo = vend && a.vendido ? '<div class="aviso big malc">💰 <b>Vendida</b> el ' + fechaTxt(a.vendido.fecha) + (a.vendido.comprador ? ' a ' + h(a.vendido.comprador) : '') + (a.vendido.valor ? ' por ' + money(a.vendido.valor) : '') + '</div>' : (a.estado === 'muerto' ? '<div class="aviso big malc">Este animal ya no está en la finca.</div>' : '');
+  return '<div class="row" style="margin-bottom:8px"><button class="btn mini sec" data-act="volveranimales">◀ Volver</button></div>' +
+    '<div class="card"><div class="row" style="flex-wrap:nowrap;align-items:center">' + avatar(a, 84) + '<div class="grow"><h2 class="serif" style="font-size:26px">' + h(a.nombre) + '</h2><div class="small muted">' + (a.tipo === 'ternera' ? 'Ternera' : 'Cabra') + ' · ' + (a.sexo === 'macho' ? 'Macho' : 'Hembra') + (a.raza ? ' · ' + h(a.raza) : '') + '</div><div style="margin-top:4px">' + estadoTxt(a) + '</div></div></div>' +
+    '<div class="row" style="margin-top:10px"><button class="btn mini" data-act="editaranimal">✏️ Editar datos</button><button class="btn mini sec" data-act="subirfoto">📷 Foto</button><button class="btn mini sol" data-act="compartiranimal">📤 Compartir</button><button class="btn mini sec" data-act="imprimiranimal">🖨️ Ver o guardar en PDF</button>' +
+    (vend || a.estado === 'muerto' ? '<button class="btn mini sec" data-act="reactivar">↩️ Está de nuevo con nosotros</button>' : '<button class="btn mini sec" data-act="vendanimal">💰 Lo vendí</button><button class="btn mini sec" data-act="bajaanimal">Ya no está</button>') + '</div></div>' + vendInfo + kpis +
+    '<div class="card"><h2 class="serif">📋 Datos</h2>' +
+    '<div class="linea"><div class="nm">Nacimiento</div><b>' + (a.nacimiento ? fechaTxt(a.nacimiento) : '—') + '</b></div><div class="linea"><div class="nm">Mamá</div><b>' + relTxt(a.madre) + '</b></div><div class="linea"><div class="nm">Papá</div><b>' + relTxt(a.padre) + '</b></div>' +
+    '<div class="linea"><div class="nm">Cómo llegó</div><b>' + (a.origen === 'nacio' ? 'Nació aquí' : a.origen === 'compra' ? 'Comprada' : '—') + '</b></div>' + (a.nota ? '<p class="small" style="margin:6px 0 0">📝 ' + h(a.nota) + '</p>' : '') + '</div>' +
+    (a.sexo === 'hembra' ? '<div class="card"><h2 class="serif">🤰 Reproducción</h2>' + repro + '</div>' : '<div class="card"><h2 class="serif">🐐 Reproductor</h2>' + repro + '</div>') +
+    rac +
+    '<div class="card"><h2 class="serif">➕ Anotar en su hoja de vida</h2><div class="chips">' + reproBtn + botones + '</div></div>' +
+    '<div class="card"><h2 class="serif">📜 Historial</h2>' + (lista || '<div class="vacio">Todavía no hay nada anotado. Empieza con el peso. ⚖️</div>') + '</div>' +
+    '<div class="card"><h2 class="serif">📎 Documentos (ICA, certificados, fotos)</h2>' + (docs || '<div class="vacio">No hay documentos.</div>') + '<button class="btn sec full" style="margin-top:8px" data-act="nuevodoc">➕ Agregar documento</button></div>' +
+    (esSup() ? '<button class="btn sec full" data-act="borraranimal">🗑️ Borrar este animal</button>' : '');
+};
+ACT.guardarracion = async function (b) {
+  const a = animalPor(S.aid); b.disabled = true;
+  try { await guardarReg('animales', Object.assign({}, a, { racionReal: val('anRac').trim() })); toast('Guardado ✅', 'ok'); } catch (e) { toast(e.message, 'err'); }
+  b.disabled = false;
+};
+ACT.reactivar = async function () { const a = animalPor(S.aid); try { await guardarReg('animales', Object.assign({}, a, { estado: 'activo' })); render(); } catch (e) { toast(e.message, 'err'); } };
+ACT.bajaanimal = async function () {
+  const a = animalPor(S.aid);
+  if (!(await confirmar('¿' + a.nombre + ' ya no está en la finca (murió o se perdió)?', 'Sí'))) return;
+  try { await guardarReg('animales', Object.assign({}, a, { estado: 'muerto', baja: hoy() })); await guardarReg('eventosAnimal', { animal: a.id, animalNombre: a.nombre, fecha: hoy(), tipo: 'nota', nota: 'Ya no está en la finca', detalle: 'Ya no está en la finca' }); render(); } catch (e) { toast(e.message, 'err'); }
+};
+ACT.vendanimal = function () {
+  const a = animalPor(S.aid);
+  modal('<h2>💰 Vender a ' + h(a.nombre) + '</h2><p class="small muted">Lo mejor es hacerlo desde Vender: ahí escoges si te pagaron en caja fuerte, efectivo, Nequi o si quedó debiendo, y la plata se suma sola.</p>' +
+    '<button class="btn full" data-act="venderdesde">🛒 Registrar la venta con su plata</button><div class="sep"></div>' +
+    '<p class="small muted">O solo márcala como vendida, sin registrar plata:</p><label>Fecha</label><input type="date" id="vdF" value="' + hoy() + '"><label>Comprador</label><input id="vdC"><label>Valor ($)</label><input id="vdV" inputmode="numeric">' +
+    '<button class="btn sec full" style="margin-top:8px" data-act="soloVendida">Solo marcarla como vendida</button>');
+};
+ACT.venderdesde = function () { cerrarModal(); const a = animalPor(S.aid); vaciarVenta(); agregarAnimalCarro(a); S.catAb = 'animales'; S.vista = 'vender'; render(); window.scrollTo(0, 0); };
+ACT.soloVendida = async function (b) {
+  const a = animalPor(S.aid); b.disabled = true;
+  try {
+    const v = { fecha: val('vdF') || hoy(), comprador: val('vdC').trim(), valor: pm(val('vdV')) };
+    await guardarReg('animales', Object.assign({}, a, { estado: 'vendido', vendido: v }));
+    await guardarReg('eventosAnimal', { animal: a.id, animalNombre: a.nombre, fecha: v.fecha, tipo: 'venta', detalle: 'Vendida' + (v.comprador ? ' a ' + v.comprador : '') + (v.valor ? ' por ' + money(v.valor) : '') });
+    cerrarModal(); render();
+  } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+function agregarAnimalCarro(a) {
+  if (S.cart.some(function (l) { return l.animal === a.id; })) return;
+  S.cart.push({ item: '', animal: a.id, pres: '', nombre: a.nombre, presNombre: 'Animal', emoji: a.tipo === 'ternera' ? '🐄' : '🐐', cant: 1, precio: a.tipo === 'ternera' ? (invAnimal(a).sug || 0) : 0, base: 1, emp: [] });
+}
+ACT.addanimal = function (b) { const a = animalPor(b.dataset.id); if (a) { agregarAnimalCarro(a); render(); } };
+
+function evCampos(k, e) {
+  e = e || {};
+  const f = '<label>Fecha</label><input type="date" id="evF" value="' + h(e.fecha || hoy()) + '">';
+  const nota = '<label>Nota (opcional)</label><input id="evNo" value="' + h(e.nota || '') + '">';
+  if (k === 'peso') return f + '<label>Peso (kg)</label><input id="evKg" inputmode="decimal" value="' + h(e.kg ? numTxt(e.kg) : '') + '">' + nota;
+  if (k === 'vacuna' || k === 'desparasitacion' || k === 'bano' || k === 'medicamento') {
+    const lb = { vacuna: 'Vacuna', desparasitacion: 'Desparasitante', bano: 'Producto del baño', medicamento: 'Medicamento o inyección' }[k];
+    return f + '<label>Hora (opcional)</label><input type="time" id="evH" value="' + h(e.hora || '') + '"><label>' + lb + '</label><input id="evPr" value="' + h(e.producto || '') + '" placeholder="Nombre del producto">' + '<label>Dosis</label><input id="evDo" value="' + h(e.dosis || '') + '" placeholder="Ej: 2 ml">' +
+      '<label>' + (k === 'medicamento' ? 'Repetir el (opcional)' : 'Próxima vez') + '</label><input type="date" id="evPx" value="' + h(e.proxima || '') + '">' + nota;
+  }
+  if (k === 'gastoAnimal') return f + '<label>¿En qué fue? (medicina, comida, transporte…)</label><input id="evCp" value="' + h(e.concepto || '') + '"><label>Valor ($)</label><input id="evVa" inputmode="numeric" value="' + h(e.valor ? fmtN.format(e.valor) : '') + '">' + nota;
+  if (k === 'litros') return f + '<label>Litros que dio</label><input id="evLi" inputmode="decimal" value="' + h(e.litros ? numTxt(e.litros) : '') + '">' + nota;
+  if (k === 'alimentacion') return f + '<label>Concentrado (kg al día)</label><input id="evCo" inputmode="decimal" value="' + h(e.conc ? numTxt(e.conc) : '') + '"><label>Pasto, heno u otro</label><input id="evFo" value="' + h(e.forraje || '') + '" placeholder="Ej: 4 kg de pasto kikuyo">' + nota;
+  if (k === 'monta') {
+    const ms = animales().filter(function (x) { return x.sexo === 'macho' && x.estado === 'activo'; }).map(function (x) { return '<option value="' + h(x.nombre) + '">'; }).join('');
+    return f + '<label>¿Qué cabro la montó?</label><input id="evMa" list="dlMa" value="' + h(e.machoNombre || '') + '" placeholder="Ej: Pacho"><datalist id="dlMa">' + ms + '</datalist>' + nota +
+      '<div class="aviso" id="evCalc"></div>';
+  }
+  if (k === 'chequeo') return f + '<label>Resultado</label><select id="evRe">' + opts([['prenada', '🤰 Está preñada'], ['vacia', 'Está vacía (no cogió)']], e.resultado || 'prenada') + '</select>' + nota;
+  if (k === 'parto') {
+    const fila = function (i) { return '<div class="grid3" style="grid-template-columns:2fr 1.3fr 1fr"><div><label>Cría ' + i + '</label><input id="cr' + i + 'N" placeholder="Nombre"></div><div><label>Sexo</label><select id="cr' + i + 'S">' + opts([['hembra', 'Hembra'], ['macho', 'Macho']], 'hembra') + '</select></div><div><label>Kg</label><input id="cr' + i + 'K" inputmode="decimal"></div></div>'; };
+    return f + '<label>¿Cómo fue el parto?</label><select id="evRes">' + opts([['normal', '✅ Parto normal, crías sanas'], ['prematuro', '⚠️ Prematuro'], ['aborto', '❌ Aborto'], ['muerta', '❌ Nacieron muertas']], e.resultado || 'normal') + '</select><p class="small muted">Escribe el nombre de cada cría que nació; deja vacías las filas que no uses. Las crías se agregan solas a Animales: las hembras a Terneras y los machos a Cabras.</p>' + fila(1) + fila(2) + fila(3) + nota;
+  }
+  return f + '<label>Nota</label><textarea id="evNo" rows="3">' + h(e.nota || '') + '</textarea>';
+}
+function evModal(k, e) {
+  const a = animalPor(S.aid);
+  S.evEd = { k: k, id: e ? e.id : '', orig: e || null };
+  S.adj.ev = [];
+  modal('<h2>' + EVT[k][0] + ' ' + EVT[k][1] + ' · ' + h(a.nombre) + '</h2>' + evCampos(k, e) + adjUI('ev', '📎 Adjuntar foto o documento (opcional)') +
+    '<button class="btn full" style="margin-top:12px" data-act="guardarevento">Guardar</button>');
+  evCalc();
+}
+function evCalc() {
+  const el = $('evCalc'); if (!el) return;
+  const f = val('evF'); if (!f) return;
+  const p = sumarDias(f, GESTACION);
+  el.innerHTML = '📅 Parto estimado: <b>' + fechaTxt(p) + '</b> (entre ' + fechaTxt(sumarDias(f, GESTACION - 5)) + ' y ' + fechaTxt(sumarDias(f, GESTACION + 5)) + '). Faltan ' + difDias(hoy(), p) + ' días.';
+}
+ACT.nuevoevento = function (b) { evModal(b.dataset.k, null); };
+ACT.editarevento = function (b) { const e = (S.d.reg.eventosAnimal || []).filter(function (x) { return x.id === b.dataset.id; })[0]; if (e) { if (e.tipo === 'parto') return toast('Los partos no se editan. Edita a las crías en su hoja de vida.', 'err'); evModal(e.tipo, e); } };
+ACT.borrarevento = async function (b) {
+  if (!(await confirmar('¿Borrar este registro del historial?', 'Borrar'))) return;
+  try { await borrarReg('eventosAnimal', b.dataset.id); render(); } catch (e) { toast(e.message, 'err'); }
+};
+ACT.guardarevento = async function (b) {
+  const a = animalPor(S.aid), k = S.evEd.k, base = S.evEd.orig || {};
+  const rec = Object.assign({}, base, { animal: a.id, animalNombre: a.nombre, tipo: k, fecha: val('evF') || hoy() });
+  if (k === 'peso') { rec.kg = pq(val('evKg')); if (!(rec.kg > 0)) return toast('Escribe el peso.', 'err'); }
+  if (k === 'vacuna' || k === 'desparasitacion' || k === 'bano' || k === 'medicamento') { rec.producto = val('evPr').trim(); rec.dosis = val('evDo').trim(); rec.proxima = val('evPx'); rec.hora = val('evH'); if (!rec.producto) return toast('Escribe el nombre del producto.', 'err'); }
+  if (k === 'gastoAnimal') { rec.valor = pm(val('evVa')); rec.concepto = val('evCp').trim(); if (!(rec.valor > 0)) return toast('Escribe el valor.', 'err'); }
+  if (k === 'litros') { rec.litros = pq(val('evLi')); if (!(rec.litros > 0)) return toast('Escribe los litros.', 'err'); }
+  if (k === 'alimentacion') { rec.conc = pq(val('evCo')); rec.forraje = val('evFo').trim(); }
+  if (k === 'monta') { rec.machoNombre = val('evMa').trim(); if (!rec.machoNombre) return toast('Escribe quién la montó.', 'err'); }
+  if (k === 'chequeo') rec.resultado = val('evRe');
+  if (val('evNo') !== '') rec.nota = val('evNo').trim(); else delete rec.nota;
+  const crias = [];
+  if (k === 'parto') {
+    [1, 2, 3].forEach(function (i) { const n = val('cr' + i + 'N').trim(); if (n) crias.push({ nombre: n, sexo: val('cr' + i + 'S'), kg: pq(val('cr' + i + 'K')) }); });
+    rec.resultado = val('evRes') || 'normal'; rec.nCrias = crias.length;
+    if (!crias.length && (rec.resultado === 'normal' || rec.resultado === 'prematuro')) return toast('Escribe el nombre de al menos una cría.', 'err');
+    const rn = crias.filter(function (c) { return animalNombre(c.nombre); });
+    if (rn.length) return toast('Ya existe un animal llamado ' + rn[0].nombre + '. Usa otro nombre.', 'err');
+    rec.detalle = (RES_PARTO[rec.resultado] ? RES_PARTO[rec.resultado] + ' · ' : '') + (crias.length ? crias.length + (crias.length === 1 ? ' cría: ' : ' crías: ') + crias.map(function (c) { return c.nombre + ' (' + c.sexo + ')'; }).join(', ') : 'sin crías vivas');
+  }
+  rec.detalle = rec.detalle || evResumen(rec);
+  b.disabled = true;
+  try {
+    const subidos = await adjSubir('ev');
+    if (subidos.length) rec.adj = (rec.adj || []).concat(subidos);
+    const sav = await guardarReg('eventosAnimal', rec);
+    if (k === 'parto') {
+      const rp = estadoRepro(Object.assign({}, a)), padre = rp && rp.macho ? rp.macho : '';
+      const antes = eventosDe(a.id).filter(function (x) { return x.tipo === 'monta' && x.fecha <= rec.fecha; }).slice(-1)[0];
+      for (let i = 0; i < crias.length; i++) {
+        const c = crias[i];
+        const an = await guardarReg('animales', { nombre: c.nombre, tipo: c.sexo === 'hembra' ? 'ternera' : 'cabra', sexo: c.sexo, estado: 'activo', nacimiento: rec.fecha, madre: a.nombre, padre: padre || (antes ? antes.machoNombre : ''), origen: 'nacio', pesoIni: c.kg || 0, nota: c.sexo === 'macho' ? 'Cabrito macho' : '' });
+        if (c.kg > 0) await guardarReg('eventosAnimal', { animal: an.id, animalNombre: an.nombre, fecha: rec.fecha, tipo: 'peso', kg: c.kg, detalle: c.kg + ' kg al nacer' });
+      }
+    }
+    cerrarModal(); toast(k === 'parto' ? '¡Felicitaciones! Crías agregadas ✅' : 'Guardado ✅', 'ok'); render();
+  } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+
+ACT.nuevodoc = function () {
+  S.adj.doc = [];
+  modal('<h2>📄 Agregar documento</h2><label>¿Qué es?</label><input id="dcN" placeholder="Ej: Registro ICA, certificado de vacunación"><label>Fecha</label><input type="date" id="dcF" value="' + hoy() + '">' + adjUI('doc', '📎 Escoger foto, PDF o archivo') +
+    '<button class="btn full" style="margin-top:12px" data-act="guardardoc">Guardar documento</button>');
+};
+ACT.guardardoc = async function (b) {
+  const a = animalPor(S.aid);
+  if (!S.adj.doc.length) return toast('Escoge el archivo primero.', 'err');
+  b.disabled = true;
+  try {
+    const subidos = await adjSubir('doc'), nom = val('dcN').trim();
+    subidos.forEach(function (f) { if (nom) f.nombre = nom + (subidos.length > 1 ? ' · ' + f.nombre : ''); f.fecha = val('dcF') || hoy(); });
+    await guardarReg('animales', Object.assign({}, a, { adj: (a.adj || []).concat(subidos) }));
+    cerrarModal(); toast('Documento guardado ✅', 'ok'); render();
+  } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+ACT.subirfoto = function () {
+  S.adj.foto = [];
+  modal('<h2>📷 Foto de ' + h(animalPor(S.aid).nombre) + '</h2>' + adjUI('foto', '📷 Tomar o escoger la foto') + '<button class="btn full" style="margin-top:12px" data-act="guardarfoto">Guardar foto</button>');
+};
+ACT.guardarfoto = async function (b) {
+  const a = animalPor(S.aid);
+  if (!S.adj.foto.length) return toast('Escoge la foto primero.', 'err');
+  b.disabled = true;
+  try {
+    const s = await adjSubir('foto'); s.forEach(function (f) { f.foto = true; f.nombre = 'Foto de ' + a.nombre; f.fecha = hoy(); });
+    await guardarReg('animales', Object.assign({}, a, { adj: (a.adj || []).concat(s) }));
+    cerrarModal(); render();
+  } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+ACT.quitardoc = async function (b) {
+  const a = animalPor(S.aid);
+  if (!(await confirmar('¿Quitar este documento de la hoja de vida?', 'Quitar'))) return;
+  const adj = (a.adj || []).slice(); adj.splice(+b.dataset.i, 1);
+  try { await guardarReg('animales', Object.assign({}, a, { adj: adj })); render(); } catch (e) { toast(e.message, 'err'); }
+};
+
+S.adj = {};
+function adjUI(k, titulo) {
+  S.adj[k] = S.adj[k] || [];
+  return '<div id="adj_' + k + '">' + adjInner(k, titulo) + '</div>';
+}
+function adjInner(k, titulo) {
+  const l = S.adj[k] || [];
+  return '<label class="btn sec" style="display:block;text-align:center;margin-top:8px">' + (titulo || '📎 Adjuntar') + '<input type="file" hidden accept="image/' + String.fromCharCode(42) + ',application/pdf" multiple data-adj="' + k + '" data-tit="' + h(titulo || '') + '"></label>' +
+    l.map(function (f, i) { return '<div class="linea"><span>' + (f.mime === 'application/pdf' ? '📄' : '🖼️') + '</span><div class="nm">' + h(f.nombre) + '<small>' + Math.round(f.b64.length * 0.75 / 1024) + ' KB</small></div><button class="btn mini sec" data-act="adjquitar" data-k="' + k + '" data-i="' + i + '" data-tit="' + h(titulo || '') + '">✕</button></div>'; }).join('');
+}
+function adjPintar(k, titulo) { const e = $('adj_' + k); if (e) e.innerHTML = adjInner(k, titulo); }
+ACT.adjquitar = function (b) { S.adj[b.dataset.k].splice(+b.dataset.i, 1); adjPintar(b.dataset.k, b.dataset.tit); };
+function comprimirImagen(file) {
+  return new Promise(function (res) {
+    const fr = new FileReader();
+    fr.onload = function () {
+      const im = new Image();
+      im.onload = function () {
+        const s = Math.min(1, 1280 / Math.max(im.width, im.height)), w = Math.round(im.width * s), hh = Math.round(im.height * s);
+        const c = document.createElement('canvas'); c.width = w; c.height = hh; c.getContext('2d').drawImage(im, 0, 0, w, hh);
+        res(c.toDataURL('image/jpeg', 0.8).split(',')[1]);
+      };
+      im.onerror = function () { res(null); };
+      im.src = fr.result;
+    };
+    fr.onerror = function () { res(null); };
+    fr.readAsDataURL(file);
+  });
+}
+function leerArchivo(file) {
+  return new Promise(function (res) { const fr = new FileReader(); fr.onload = function () { res(String(fr.result).split(',')[1]); }; fr.onerror = function () { res(null); }; fr.readAsDataURL(file); });
+}
+async function adjElegir(k, files, titulo) {
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    let b64, mime, nombre = f.name || 'archivo';
+    if (String(f.type).indexOf('image/') === 0) { b64 = await comprimirImagen(f); mime = 'image/jpeg'; nombre = nombre.replace(/\.[^.]+$/, '') + '.jpg'; }
+    else if (f.type === 'application/pdf') { b64 = await leerArchivo(f); mime = 'application/pdf'; }
+    else { toast('Solo se pueden anexar fotos o PDF.', 'err'); continue; }
+    if (!b64) { toast('No pude leer ' + nombre, 'err'); continue; }
+    if (b64.length > 8500000) { toast(nombre + ' pesa mucho (máximo 6 MB).', 'err'); continue; }
+    S.adj[k].push({ nombre: nombre, mime: mime, b64: b64 });
+  }
+  adjPintar(k, titulo);
+}
+async function adjSubir(k) {
+  const l = S.adj[k] || [], out = [];
+  for (let i = 0; i < l.length; i++) out.push(JSON.parse(await call('subirArchivo', l[i].nombre, l[i].mime, l[i].b64)));
+  S.adj[k] = [];
+  return out;
+}
+
+function hojaTexto(a) {
+  const p = pesoActual(a), r = estadoRepro(a), evs = eventosDe(a.id);
+  const L = ['🐐 HOJA DE VIDA · ' + a.nombre, 'El Rincón de Rincón · La vida en el campo', ''];
+  L.push('Grupo: ' + (a.tipo === 'ternera' ? 'Ternera' : 'Cabra') + ' · ' + (a.sexo === 'macho' ? 'Macho' : 'Hembra') + (a.raza ? ' · ' + a.raza : ''));
+  L.push('Edad: ' + edadTxt(a) + (a.nacimiento ? ' (nació el ' + fechaTxt(a.nacimiento) + ')' : ''));
+  if (p) L.push('Peso: ' + numTxt(p.kg) + ' kg' + (p.fecha ? ' (' + fechaTxt(p.fecha) + ')' : ''));
+  if (a.madre) L.push('Mamá: ' + a.madre); if (a.padre) L.push('Papá: ' + a.padre);
+  if (a.estado === 'vendido' && a.vendido) L.push('VENDIDA el ' + fechaTxt(a.vendido.fecha) + (a.vendido.comprador ? ' a ' + a.vendido.comprador : ''));
+  if (r && r.prenada) L.push('Preñada de ' + (r.macho || 'cabro sin nombre') + ' · parto estimado ' + fechaTxt(r.parto));
+  if (a.racionReal) L.push('Ración: ' + a.racionReal);
+  if (a.nota) L.push('Notas: ' + a.nota);
+  L.push('', 'HISTORIAL');
+  if (!evs.length) L.push('(sin registros)');
+  evs.forEach(function (e) { L.push('• ' + fechaTxt(e.fecha) + ' · ' + EVT[e.tipo][1] + ': ' + evResumen(e)); });
+  const docs = (a.adj || []).concat.apply([], evs.map(function (e) { return e.adj || []; }));
+  if (docs.length) { L.push('', 'DOCUMENTOS'); docs.forEach(function (f) { L.push('• ' + f.nombre + ': ' + f.url); }); }
+  return L.join('\n');
+}
+ACT.compartiranimal = async function () {
+  const a = animalPor(S.aid), t = hojaTexto(a);
+  try { if (navigator.share) { await navigator.share({ title: 'Hoja de vida de ' + a.nombre, text: t }); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(t); toast('Copiada. Pégala en WhatsApp o donde quieras.', 'ok'); }
+  catch (e) { window.open('https:' + SL2 + 'wa.me/?text=' + encodeURIComponent(t), '_blank'); }
+};
+ACT.imprimiranimal = function () {
+  const a = animalPor(S.aid), evs = eventosDe(a.id), p = pesoActual(a), r = estadoRepro(a);
+  let el = $('hojaPrint');
+  if (!el) { el = document.createElement('div'); el.id = 'hojaPrint'; document.body.appendChild(el); }
+  const fila = function (k, v) { return v ? '<tr><td><b>' + k + '</b></td><td>' + h(v) + '</td></tr>' : ''; };
+  const f = (a.adj || []).filter(function (x) { return x.foto; }).slice(-1)[0];
+  el.innerHTML = '<div class="hp"><h1>🐐 Hoja de vida · ' + h(a.nombre) + '</h1><p>El Rincón de Rincón · La vida en el campo</p>' + (f ? '<img src="' + h(thumbUrl(f)) + '" style="max-width:220px;border-radius:12px">' : '') +
+    '<table>' + fila('Grupo', (a.tipo === 'ternera' ? 'Ternera' : 'Cabra') + ' · ' + (a.sexo === 'macho' ? 'Macho' : 'Hembra')) + fila('Raza', a.raza) + fila('Edad', edadTxt(a)) + fila('Nacimiento', a.nacimiento ? fechaTxt(a.nacimiento) : '') + fila('Peso', p ? numTxt(p.kg) + ' kg' : '') + fila('Mamá', a.madre) + fila('Papá', a.padre) +
+    fila('Estado', a.estado === 'vendido' ? 'Vendida' + (a.vendido ? ' el ' + fechaTxt(a.vendido.fecha) + (a.vendido.comprador ? ' a ' + a.vendido.comprador : '') : '') : r && r.prenada ? 'Preñada de ' + (r.macho || '—') + ', parto estimado ' + fechaTxt(r.parto) : 'Activa') + fila('Ración', a.racionReal) + fila('Notas', a.nota) + '</table>' +
+    '<h2>Historial</h2><table>' + (evs.map(function (e) { return '<tr><td>' + fechaTxt(e.fecha) + '</td><td><b>' + h(EVT[e.tipo][1]) + '</b></td><td>' + h(evResumen(e)) + '</td></tr>'; }).join('') || '<tr><td>Sin registros</td></tr>') + '</table>' +
+    ((a.adj || []).length ? '<h2>Documentos</h2><ul>' + a.adj.map(function (d) { return '<li>' + h(d.nombre) + ' — ' + h(d.url) + '</li>'; }).join('') + '</ul>' : '') + '</div>';
+  setTimeout(function () { window.print(); }, 250);
+};
+
+function alertasAnimales() {
+  const out = [], hy = hoy();
+  animales().filter(function (a) { return a.estado === 'activo'; }).forEach(function (a) {
+    const r = estadoRepro(a);
+    if (r && r.prenada && r.dias <= diasPreparto() && r.dias > 30) out.push({ t: 'precio', txt: '🌱 ' + a.nombre + ' ya está en preparto (faltan ' + r.dias + ' días para parir): dale ' + Math.round(etapaInfo(a).g) + ' g de concentrado de terneras y preparto al día.' });
+    if (r && r.prenada && r.dias <= 30) out.push({ t: 'precio', txt: '🍼 ' + a.nombre + (r.dias >= 0 ? ' pare en unos ' + r.dias + ' días (' + fechaTxt(r.parto) + '). Pásala a la ración de preparto.' : ' ya pasó la fecha estimada de parto. Revísala.') });
+    const ult = {};
+    eventosDe(a.id).forEach(function (e) { if (e.proxima) ult[e.tipo + '|' + norm(e.producto)] = e; else if (e.producto) delete ult[e.tipo + '|' + norm(e.producto)]; });
+    Object.keys(ult).forEach(function (k) {
+      const e = ult[k], dd = difDias(hy, e.proxima);
+      if (dd <= 7) out.push({ t: 'precio', txt: (EVT[e.tipo][0]) + ' ' + a.nombre + ': ' + (dd < 0 ? 'se pasó' : 'toca') + ' ' + EVT[e.tipo][1].toLowerCase() + ' (' + e.producto + ') ' + (dd < 0 ? 'desde el ' : 'el ') + fechaTxt(e.proxima) + '.' });
+    });
+  });
+  return out;
+}
+
+function facturaDe(tipo, id) { return (S.d.reg.facturas || []).filter(function (f) { return f.ref && f.ref.t === tipo && f.ref.id === id; }); }
+VISTAS.facturas = function () {
+  const pref = calPref('facturas'), fs = (S.d.reg.facturas || []).slice().sort(function (a, b) { return a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : (b.ts || 0) - (a.ts || 0); });
+  const per = fs.filter(function (f) { return !pref || String(f.fecha).indexOf(pref) === 0; });
+  const tot = per.reduce(function (s, f) { return s + (+f.valor || 0); }, 0);
+  const porDia = function (mes) { const m = {}; fs.forEach(function (f) { if (String(f.fecha).indexOf(mes) === 0) m[f.fecha] = (m[f.fecha] || 0) + 1; }); return m; };
+  const cuerpo = per.map(function (f) {
+    return '<div class="linea" style="align-items:flex-start"><div class="nm"><b>' + h(f.proveedor || 'Sin proveedor') + '</b><small>' + fechaTxt(f.fecha) + (f.nota ? ' · ' + h(f.nota) : '') + '</small><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">' +
+      ((f.adj || []).map(function (x) { return x.mime === 'application/pdf' ? '<a target="_blank" rel="noopener" href="' + h(x.url) + '" class="tag ok">📄 ' + h(x.nombre) + '</a>' : '<a target="_blank" rel="noopener" href="' + h(x.url) + '"><img src="' + h(thumbUrl(x)) + '" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:2px solid var(--naranja)" onerror="this.outerHTML=\'🖼️ Ver\'"></a>'; }).join('') || '<span class="small muted">Sin archivo</span>') + '</div></div><b class="num">' + (+f.valor ? money(f.valor) : '') + '</b>' +
+      '<div style="display:flex;flex-direction:column;gap:4px"><button class="btn mini sec" data-act="editarfactura" data-id="' + h(f.id) + '">✏️</button>' + (esSup() ? '<button class="btn mini sec" data-act="borrar" data-t="facturas" data-id="' + h(f.id) + '">🗑️</button>' : '') + '</div></div>';
+  }).join('') || '<div class="vacio">No hay facturas en este periodo.</div>';
+  return '<div class="titulo serif">🧾 Facturas</div><button class="btn full" data-act="nuevafactura">➕ Guardar una factura</button><div class="card" style="margin-top:10px"><h2 class="serif">📅 Ver facturas</h2>' + calUI('facturas', porDia, function (v) { return v; }) +
+    '<div class="kpis"><div class="kpi"><small>' + h(calTexto('facturas')) + '</small><b>' + per.length + ' facturas</b></div>' + (tot > 0 ? '<div class="kpi n"><small>Suman</small><b>' + money(tot) + '</b></div>' : '') + '</div></div><div class="card">' + cuerpo + '</div>';
+};
+function facturaModal(f) {
+  S.fed = f || null; S.adj.fa = [];
+  const regs = [];
+  S.d.reg.gastos.forEach(function (r) { regs.push(['gastos|' + r.id, r.fecha + ' · ' + r.desc + ' · ' + money(r.valor)]); });
+  S.d.reg.compras.forEach(function (r) { regs.push(['compras|' + r.id, r.fecha + ' · ' + r.nombre + ' · ' + money(r.costo)]); });
+  regs.sort(function (a, b) { return a[1] < b[1] ? 1 : -1; });
+  modal('<h2>' + (f ? '✏️ Corregir factura' : '🧾 Guardar factura') + '</h2><label>Proveedor o tienda</label><input id="faP" value="' + h(f ? f.proveedor : '') + '" placeholder="Ej: Agrocentro">' +
+    '<div class="grid2"><div><label>Fecha</label><input type="date" id="faF" value="' + h(f ? f.fecha : hoy()) + '"></div><div><label>Valor ($)</label><input id="faV" inputmode="numeric" value="' + h(f && f.valor ? fmtN.format(f.valor) : '') + '" placeholder="Opcional"></div></div>' +
+    '<label>Nota</label><input id="faN" value="' + h(f ? f.nota || '' : '') + '" placeholder="Ej: Concentrado de noviembre">' +
+    '<label>¿Es de un gasto o compra que ya registraste? (opcional)</label><select id="faR"><option value="">No, solo guardar la factura</option>' + regs.slice(0, 80).map(function (r) { return '<option value="' + h(r[0]) + '"' + (f && f.ref && f.ref.t + '|' + f.ref.id === r[0] ? ' selected' : '') + '>' + h(r[1]) + '</option>'; }).join('') + '</select>' +
+    (f && (f.adj || []).length ? '<p class="small muted">Archivos ya guardados: ' + f.adj.map(function (x) { return h(x.nombre); }).join(', ') + '</p>' : '') +
+    adjUI('fa', '📷 Tomar foto o escoger archivo (foto o PDF)') + '<p class="small muted">El archivo es opcional: no siempre te dan factura.</p><button class="btn full" style="margin-top:8px" data-act="guardarfactura">Guardar</button>');
+}
+ACT.nuevafactura = function () { facturaModal(null); };
+ACT.editarfactura = function (b) { facturaModal((S.d.reg.facturas || []).filter(function (x) { return x.id === b.dataset.id; })[0]); };
+ACT.guardarfactura = async function (b) {
+  const f = S.fed, ref = val('faR').split('|');
+  const rec = Object.assign({}, f || {}, { proveedor: val('faP').trim(), fecha: val('faF') || hoy(), valor: pm(val('faV')), nota: val('faN').trim() });
+  if (ref.length === 2) rec.ref = { t: ref[0], id: ref[1] }; else delete rec.ref;
+  if (!rec.proveedor && !rec.nota && !S.adj.fa.length && !(f && (f.adj || []).length)) return toast('Escribe el proveedor o adjunta el archivo.', 'err');
+  b.disabled = true;
+  try { const s = await adjSubir('fa'); rec.adj = (rec.adj || []).concat(s); await guardarReg('facturas', rec); cerrarModal(); toast('Factura guardada ✅', 'ok'); render(); }
+  catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+
+function nomForma(x) {
+  const f = +S.cf.fp || 1, p = ((x && x.cp) || []).filter(function (q) { return +q.f === f; })[0];
+  return p ? p.n : (x && x.unidad ? x.unidad : 'unidad');
+}
+function cfSync(campo) {
+  const x = itemPor(S.cf.item), c = pq(S.cf.cant), g = function (t) { return Math.round(pm(t)); };
+  const poner = function (id, v) { const e = $(id); if (e) e.value = v > 0 ? fmtN.format(Math.round(v)) : ''; };
+  if (campo === 'pu') { const t = g(S.cf.pu) * c; S.cf.costo = t > 0 ? fmtN.format(Math.round(t)) : ''; poner('cfCosto', t); }
+  else if (campo === 'costo') { const u = c > 0 ? g(S.cf.costo) / c : 0; S.cf.pu = u > 0 ? fmtN.format(Math.round(u)) : ''; poner('cfPu', u); }
+  else if (campo === 'cant' || campo === 'fp') { if (g(S.cf.pu) > 0) { const t = g(S.cf.pu) * c; S.cf.costo = t > 0 ? fmtN.format(Math.round(t)) : ''; poner('cfCosto', t); } else if (g(S.cf.costo) > 0 && c > 0) { const u = g(S.cf.costo) / c; S.cf.pu = fmtN.format(Math.round(u)); poner('cfPu', u); } }
+}
+
+function cuentasPorPagar() {
+  const l = deudasProv();
+  if (!l.length) return '';
+  const tot = l.reduce(function (a, x) { return a + x.pend; }, 0);
+  return '<div class="card"><h2 class="serif">🧾 Cuentas por pagar</h2><p class="small muted">Lo que todavía debes: <b>' + money(tot) + '</b></p>' + l.map(function (x, i) {
+    return '<div class="linea"><div class="nm">' + h(x.quien) + '<small>' + h(x.que) + ' · ' + fechaTxt(x.r.fecha) + ' · total ' + money(x.v) + '</small></div><b class="num" style="color:#C41212">' + money(x.pend) + '</b>' +
+      (esSup() ? '<button class="btn mini" data-act="pagardeuda" data-t="' + x.t + '" data-id="' + h(x.r.id) + '">Pagar</button>' : '') + '</div>';
+  }).join('') + '</div>';
+}
+ACT.pagardeuda = function (b) {
+  const l = deudasProv().filter(function (x) { return x.t === b.dataset.t && x.r.id === b.dataset.id; })[0];
+  if (!l) return;
+  modal('<h2>💵 Pagar o abonar</h2><p>' + h(l.quien) + ' · ' + h(l.que) + '<br>Falta pagar: <b>' + money(l.pend) + '</b></p><label>¿Cuánto pagas ahora? ($)</label><input id="pdV" inputmode="numeric" value="' + fmtN.format(Math.round(l.pend)) + '">' +
+    '<label>¿De dónde sale la plata?</label>' + medioSel('pdM', S.d.cfg.medios[0] ? S.d.cfg.medios[0].id : '') + '<label>Fecha</label><input type="date" id="pdF" value="' + hoy() + '">' +
+    '<button class="btn full" style="margin-top:12px" data-act="guardarpago" data-t="' + l.t + '" data-id="' + h(l.r.id) + '">Guardar pago</button>');
+};
+ACT.guardarpago = async function (b) {
+  const l = deudasProv().filter(function (x) { return x.t === b.dataset.t && x.r.id === b.dataset.id; })[0];
+  if (!l) return;
+  const v = Math.round(pm(val('pdV')));
+  if (!(v > 0)) return toast('Escribe cuánto pagas.', 'err');
+  if (v > l.pend + 0.5) return toast('Eso es más de lo que debes (' + money(l.pend) + ').', 'err');
+  const r = JSON.parse(JSON.stringify(l.r));
+  r.abonos = (r.abonos || []).concat([{ fecha: val('pdF') || hoy(), medio: val('pdM'), valor: v }]);
+  b.disabled = true;
+  try { await guardarReg(l.t, r); cerrarModal(); toast('Pago guardado ✅', 'ok'); render(); } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+
+async function asegurarHuevos() {
+  try {
+    const c = S.d.cfg;
+    if (c.huevos3 || !esSup()) return;
+    const lista = JSON.parse(JSON.stringify(S.d.items));
+    const hv = lista.filter(function (x) { return x.tipo === 'producto' && norm(x.nombre) === 'huevos'; })[0];
+    if (hv && (hv.pres || []).filter(function (p) { return p.activo !== false; }).length <= 1) {
+      const u = (hv.pres || [])[0];
+      hv.pres = [
+        { id: uid('pe'), nombre: 'Panal de huevos (30)', cant: 30, precio: 20000, emp: [], activo: true },
+        { id: uid('pe'), nombre: 'Medio panal (15)', cant: 15, precio: 10000, emp: [], activo: true },
+        { id: u ? u.id : uid('pe'), nombre: 'Huevo individual', cant: 1, precio: 1000, emp: [], activo: true }
+      ];
+      await call('guardarItems', JSON.stringify(lista));
+    }
+    const cfg = JSON.parse(JSON.stringify(c)); cfg.huevos3 = hoy();
+    await call('guardarConfig', JSON.stringify(cfg));
+    await cargar();
+  } catch (e) { }
+}
+async function asegurarTodo() { await asegurarBase(); await asegurarAnimales(); await asegurarHuevos(); }
+
+function balDatos() {
+  const b = S.sub.bal || {}, pref = b.modo === 'anio' ? b.anio : b.mes, d = S.d;
+  return { pref: pref, B: calcBalance(pref), en: function (f) { return String(f || '').indexOf(pref) === 0; } };
+}
+function balPeor() {
+  const d = S.d, c = S.c, out = [];
+  productos().forEach(function (x) { (x.pres || []).filter(function (p) { return p.activo !== false; }).forEach(function (p) {
+    const a = analisis(d, c, x, p); if (a.est === 'bajo') out.push({ txt: x.emoji + ' ' + x.nombre + ' (' + p.nombre + '): vendes a ' + money(a.precio) + ' y te cuesta ' + money(a.costo) + ' → ganas ' + money(a.gan) + ' (' + pct(a.pct) + '). Súbelo a ' + money(a.sug) + '.', gan: a.gan });
+  }); });
+  return out.sort(function (a, b) { return a.gan - b.gan; });
+}
+ACT.balexp = function (b) {
+  const k = b.dataset.k, D = balDatos(), B = D.B, d = S.d, R = d.reg;
+  let t = '', tit = '';
+  const li = function (a) { return '<ul style="padding-left:18px;margin:6px 0">' + a.map(function (z) { return '<li style="margin:4px 0">' + z + '</li>'; }).join('') + '</ul>'; };
+  const nv = R.ventas.filter(function (v) { return D.en(v.fecha) && !v.saldoAnt; }).length;
+  if (k === 'ing') {
+    tit = '💰 Ventas';
+    t = '<p>Es toda la plata de las <b>' + nv + ' ventas</b> de este periodo: <b>' + money(B.ing) + '</b>. Aquí no se ha descontado nada todavía.</p>' + (B.histIng > 0 ? '<p>' + money(B.histIng) + ' vienen de tu Excel anterior.</p>' : '');
+  } else if (k === 'costo') {
+    tit = '🧾 Costo de lo vendido';
+    t = '<p>Es lo que te costó hacer lo que vendiste (leche, concentrado, empaques, bolsas…): <b>' + money(B.costo) + '</b>.</p><p>Si este número está alto frente a las ventas, el producto cuesta mucho o lo estás vendiendo barato. Revisa abajo la tabla "Ganancia por producto".</p>';
+  } else if (k === 'bruta') {
+    tit = '🧀 Ganancia de productos';
+    const w = balPeor();
+    t = '<p>Ventas ' + money(B.ing) + ' menos costo ' + money(B.costo) + ' = <b>' + money(B.bruta) + '</b>.</p>' + (B.bruta < 0 ? '<p><b>Es negativa:</b> estás vendiendo por debajo de lo que cuesta.</p>' : '') +
+      (w.length ? '<p><b>Productos con poca o nada de ganancia:</b></p>' + li(w.slice(0, 6).map(function (z) { return z.txt; })) : '<p>Todos tus precios están sobre el margen mínimo. 👍</p>');
+  } else if (k === 'gen') {
+    tit = '🌾 Gastos del campo y otros';
+    const cat = {}, add = function (n, v) { cat[n] = (cat[n] || 0) + v; };
+    R.gastos.filter(function (r) { return D.en(r.fecha) && tipoGasto(r, d) !== 'inversion'; }).forEach(function (r) { add(r.cat || 'Otros', +r.valor || 0); });
+    R.compras.filter(function (r) { return D.en(r.fecha) && tipoCompra(r) === 'fijo'; }).forEach(function (r) { add('Compras: ' + r.nombre, +r.costo || 0); });
+    const ks = Object.keys(cat).sort(function (a, c) { return cat[c] - cat[a]; });
+    t = '<p>Son los gastos que no son de un producto en particular (trabajador, alimento, veterinario, servicios…): <b>' + money(B.gen) + '</b>.</p>' + (ks.length ? li(ks.slice(0, 8).map(function (n) { return h(n) + ': <b>' + money(cat[n]) + '</b>'; })) : '') +
+      (B.litros > 0 ? '<p>Eso es ' + money(B.gen / B.litros) + ' por cada litro ordeñado.</p>' : '');
+  } else if (k === 'otros') {
+    tit = '⚠️ Daños, vencidos y regalos';
+    t = '<p>Plata que se fue sin entrar a la caja: <b>' + money(B.otros) + '</b>.</p>' + li(['Daños y vencidos: <b>' + money(B.perd) + '</b>', 'Regalos: <b>' + money(B.reg) + '</b>', 'Diferencias al contar el inventario: <b>' + money(B.dif) + '</b>']) +
+      '<p class="small muted">Si en un conteo había menos de lo que decía el sistema, esa diferencia se suma aquí.</p>';
+  } else {
+    tit = '📈 Ganancia neta';
+    t = '<p>Ganancia de productos ' + money(B.bruta) + ' − daños/regalos ' + money(B.otros) + ' − gastos ' + money(B.gen) + ' = <b>' + money(B.neta) + '</b>.</p>';
+    if (B.neta < 0) {
+      const m = B.ing > 0 ? B.bruta / B.ing : 0, w = balPeor();
+      const caus = [['Gastos del campo', B.gen], ['Daños, vencidos y regalos', B.otros]].sort(function (a, c) { return c[1] - a[1]; });
+      t += '<p style="color:#C41212"><b>Te faltan ' + money(-B.neta) + '</b> para quedar en cero: lo que ganas vendiendo no alcanza para pagar los gastos.</p><p><b>Lo que más pesa:</b></p>' +
+        li(caus.filter(function (z) { return z[1] > 0; }).map(function (z) { return z[0] + ': ' + money(z[1]); }));
+      if (m > 0) t += '<p>Para salir de pérdida necesitas vender unos <b>' + money(-B.neta / m) + '</b> más, o subir precios.</p>';
+      if (w.length) t += '<p><b>Estás vendiendo muy barato:</b></p>' + li(w.slice(0, 5).map(function (z) { return z.txt; }));
+      if (B.histIng > 0) t += '<p class="small muted">Ojo: parte de las ventas viene de tu Excel sin costos, por eso la ganancia real es ventas − gastos.</p>';
+      if (Math.abs(B.neta) < 5000) t += '<p class="small muted">Es una diferencia pequeña: puede ser un gasto pequeño sin registrar su venta o un redondeo.</p>';
+    } else t += '<p>Vas con ganancia. 👍 Sigue vigilando los productos con poco margen en la tabla de abajo.</p>';
+  }
+  modal('<h2>' + tit + '</h2>' + t + '<button class="btn full sec" style="margin-top:10px" data-act="cerrar">Cerrar</button>');
+};
+ACT.balprod = function (b) {
+  const x = itemPor(b.dataset.id); if (!x) return;
+  const d = S.d, c = S.c;
+  const l = (x.pres || []).filter(function (p) { return p.activo !== false; }).map(function (p) {
+    const a = analisis(d, c, x, p);
+    return '<div class="linea"><div class="nm">' + h(p.nombre) + '<small>Precio ' + money(a.precio) + ' · costo ' + money(a.costo) + '</small></div><b class="num">' + money(a.gan) + ' (' + pct(a.pct) + ')</b></div>' +
+      (a.est === 'bajo' ? '<p class="small" style="color:#C41212;margin:0 0 8px">Gana poco. Súbelo a <b>' + money(a.sug) + '</b>.</p>' : a.est === 'sincosto' ? '<p class="small muted">Falta el costo.</p>' : '');
+  }).join('');
+  modal('<h2>' + h(x.emoji) + ' ' + h(x.nombre) + '</h2>' + (l || '<p>Sin presentaciones.</p>') + '<button class="btn full sec" style="margin-top:10px" data-act="cerrar">Cerrar</button>');
+};
+
+const RES_PARTO = { normal: 'Parto normal', prematuro: 'Parto prematuro', aborto: 'Aborto', muerta: 'Nacieron muertas' };
+const NAV_CO = [['inicio', '🏠', 'Resumen'], ['vender', '🛒', 'Ventas'], ['inventario', '📦', 'Inventario'], ['caja', '💰', 'Caja'], ['ajustes', '⚙️', 'Ajustes'], ['portada', '🏡', 'Portada']];
+const NAV_AN = [['animresumen', '📋', 'Resumen'], ['animales', '🐐', 'Cabras'], ['terneras', '🐄', 'Terneras'], ['raciones', '🌾', 'Raciones'], ['portada', '🏡', 'Portada']];
+const VISTAS_AN = ['animales', 'terneras', 'animal', 'animresumen', 'raciones', 'inversion'];
+function modoDe(v) { return v === 'portada' ? '' : VISTAS_AN.indexOf(v) >= 0 ? 'animales' : 'conta'; }
+
+const ETAPAS_DEF = [
+  { id: 'cabritona', g: 'cabra', n: 'Cabritona (hasta 12 meses)', c: 400, l: 0, m: 12, i: 't' },
+  { id: 'seca', g: 'cabra', n: 'Descanso o recuperación', c: 300, l: 0, m: 0, i: 'l' },
+  { id: 'gestacion', g: 'cabra', n: 'Gestación (preñada)', c: 400, l: 0, m: 0, i: 'l' },
+  { id: 'preparto', g: 'todas', n: 'Preparto (antes de parir)', c: 600, l: 0, m: 0, i: 't' },
+  { id: 'lactancia', g: 'todas', n: 'Dando leche', c: 300, l: 400, m: 0, i: 'l' },
+  { id: 'macho', g: 'cabra', n: 'Macho reproductor', c: 400, l: 0, m: 0, i: 'l' },
+  { id: 'cria', g: 'ternera', n: 'Cría (hasta 3 meses)', c: 200, l: 0, m: 3, i: 't' },
+  { id: 'ternera', g: 'ternera', n: 'Ternera (3 a 8 meses)', c: 350, l: 0, m: 8, i: 't' },
+  { id: 'novilla', g: 'ternera', n: 'Novilla (8 a 14 meses)', c: 450, l: 0, m: 14, i: 't' },
+  { id: 'gest_t', g: 'ternera', n: 'Preñada (gestación)', c: 500, l: 0, m: 0, i: 't' },
+  { id: 'adulta', g: 'ternera', n: 'Adulta en descanso', c: 400, l: 0, m: 0, i: 'l' }
+];
+function etapas() { const e = S.d.cfg.etapas; return e && e.length ? e : ETAPAS_DEF; }
+function etapaPor(id) { return etapas().filter(function (x) { return x.id === id; })[0] || ETAPAS_DEF.filter(function (x) { return x.id === id; })[0]; }
+function diasPreparto() { return +S.d.cfg.diasPreparto || 60; }
+function precioKg(i) {
+  const it = itemPorNombre(i === 'l' ? 'Concentrado lechero' : 'Concentrado terneras y preparto');
+  const u = it && S.c.st[it.id] && S.c.st[it.id].ult > 0 ? S.c.st[it.id].ult : 0;
+  return u || +(i === 'l' ? S.d.cfg.precioConcL : S.d.cfg.precioConcT) || 0;
+}
+function mesesEn(a, f) {
+  if (!a.nacimiento) return 24;
+  const p = a.nacimiento.split('-'), q = f.split('-');
+  let m = (+q[0] - +p[0]) * 12 + (+q[1] - +p[1]); if (+q[2] < +p[2]) m--;
+  return Math.max(0, m);
+}
+function litrosEn(a, f) {
+  const ls = eventosDe(a.id).filter(function (e) { return e.tipo === 'litros' && +e.litros > 0 && e.fecha <= f; }).slice(-5);
+  if (!ls.length) return 0;
+  if (ls[ls.length - 1].fecha < sumarDias(f, -20)) return 0;
+  return ls.reduce(function (s, e) { return s + (+e.litros || 0); }, 0) / ls.length;
+}
+function etapaAuto(a, f) {
+  f = f || hoy();
+  if (a.tipo === 'cabra' && a.sexo === 'macho') return 'macho';
+  const m = mesesEn(a, f), r = a.sexo === 'hembra' ? estadoRepro(a, f) : null;
+  if (r && r.prenada) return difDias(f, r.parto) <= diasPreparto() ? 'preparto' : (a.tipo === 'ternera' ? 'gest_t' : 'gestacion');
+  if (litrosEn(a, f) > 0 || (r && r.ultimoParto && difDias(r.ultimoParto, f) <= 300)) return 'lactancia';
+  if (a.tipo === 'cabra') return a.nacimiento && m < 12 ? 'cabritona' : 'seca';
+  const lim = etapas().filter(function (x) { return x.g === 'ternera' && +x.m > 0; }).sort(function (x, y) { return x.m - y.m; });
+  for (let i = 0; i < lim.length; i++) if (m < lim[i].m) return lim[i].id;
+  return 'adulta';
+}
+function etapaManual(a, f) {
+  f = f || hoy();
+  const l = eventosDe(a.id).filter(function (e) { return e.tipo === 'etapa' && e.fecha <= f; });
+  const u = l[l.length - 1];
+  return u && u.etapa ? u : null;
+}
+function etapaDe(a, f) { const m = etapaManual(a, f); return m ? m.etapa : etapaAuto(a, f); }
+function etapaInfo(a) {
+  if (!a || !S.d) return null;
+  const id = etapaDe(a), e = etapaPor(id);
+  if (!e) return null;
+  const L = litrosProm(a);
+  return { id: id, nombre: e.n, g: (+e.c || 0) + (+e.l || 0) * L, item: e.i, manual: !!etapaManual(a), e: e };
+}
+function concDia(a, f, evs) {
+  const man = evs.filter(function (e) { return e.tipo === 'alimentacion' && e.fecha === f && +e.conc > 0; })[0];
+  const e = etapaPor(etapaDe(a, f));
+  const kg = man ? +man.conc : e ? ((+e.c || 0) + (+e.l || 0) * litrosEn(a, f)) / 1000 : 0;
+  return { kg: kg, i: e ? e.i : 't' };
+}
+function inicioConc(a) { return a.concDesde || a.nacimiento || S.d.cfg.animalesOk || hoy(); }
+function finConc(a) {
+  if (a.estado === 'vendido' && a.vendido && a.vendido.fecha) return a.vendido.fecha;
+  if (a.estado === 'muerto' && a.baja) return a.baja;
+  return hoy();
+}
+function invAnimal(a) {
+  const evs = eventosDe(a.id);
+  let f = inicioConc(a), n = 0, kg = 0, v = 0;
+  const fin = finConc(a), pr = { t: precioKg('t'), l: precioKg('l') };
+  while (f <= fin && n < 2500) { const c = concDia(a, f, evs); kg += c.kg; v += c.kg * pr[c.i]; f = sumarDias(f, 1); n++; }
+  const otros = evs.filter(function (e) { return e.tipo === 'gastoAnimal'; }).reduce(function (s, e) { return s + (+e.valor || 0); }, 0) + (+a.costoIni || 0);
+  const total = v + otros, mg = S.d.cfg.margenTerneras != null && S.d.cfg.margenTerneras !== '' ? +S.d.cfg.margenTerneras : 30;
+  const sug = total > 0 ? Math.ceil(total / (1 - Math.min(90, mg) / 100) / 1000) * 1000 : 0;
+  return { kg: kg, conc: v, otros: otros, total: total, dias: n, desde: inicioConc(a), mg: mg, sug: sug, hoyKg: concDia(a, hoy(), evs).kg };
+}
+
+function tarjetaEtapa(a) {
+  if (a.estado === 'vendido' || a.estado === 'muerto') return '';
+  const E = etapaInfo(a); if (!E) return '';
+  const auto = etapaPor(etapaAuto(a)), r = a.sexo === 'hembra' ? estadoRepro(a) : null;
+  const grupo = a.sexo === 'macho' && a.tipo === 'cabra' ? ['macho'] : [a.tipo, 'todas'];
+  const lista = etapas().filter(function (x) { return (grupo.indexOf(x.g) >= 0 && x.id !== 'macho') || (a.sexo === 'macho' && a.tipo === 'cabra' && x.id === 'macho'); });
+  let prox = '';
+  if (r && r.prenada && etapaAuto(a) !== 'preparto') { const f = sumarDias(r.parto, -diasPreparto()); prox = '<p class="small muted" style="margin:6px 0 0">🌱 Pasa a <b>preparto</b> el ' + fechaTxt(f) + ' (' + diasPreparto() + ' días antes del parto).</p>'; }
+  return '<div class="card"><h2 class="serif">🏷️ Etapa y concentrado</h2>' +
+    '<div class="aviso big okc">Etapa: <b>' + h(E.nombre) + '</b> <small>(' + (E.manual ? 'la pusiste tú' : 'automática') + ')</small><br>Concentrado: <b>' + Math.round(E.g) + ' g al día</b> · ' + (E.item === 'l' ? 'lechero' : 'de terneras y preparto') + '</div>' +
+    '<label>Cambiar la etapa</label><select id="etSel">' + opts([['', 'Automática (' + auto.n + ')']].concat(lista.map(function (x) { return [x.id, x.n]; })), E.manual ? E.id : '') + '</select>' +
+    '<button class="btn mini sec" style="margin-top:6px" data-act="guardaretapa">Guardar etapa</button>' + prox +
+    (!a.nacimiento && a.tipo === 'ternera' ? '<p class="small muted">Pon la fecha de nacimiento (✏️ Editar datos) para que la etapa se calcule sola por la edad.</p>' : '') + '</div>';
+}
+ACT.guardaretapa = async function (b) {
+  const a = animalPor(S.aid), v = val('etSel'), e = etapaPor(v);
+  b.disabled = true;
+  try {
+    await guardarReg('eventosAnimal', { animal: a.id, animalNombre: a.nombre, fecha: hoy(), tipo: 'etapa', etapa: v, detalle: v ? 'Etapa: ' + e.n : 'Etapa automática' });
+    toast('Guardado ✅', 'ok'); render();
+  } catch (x) { toast(x.message, 'err'); b.disabled = false; }
+};
+function tarjetaPartos(a) {
+  if (a.sexo !== 'hembra') return '';
+  const ps = eventosDe(a.id).filter(function (e) { return e.tipo === 'parto'; });
+  const crias = ps.reduce(function (s, e) { return s + (+e.nCrias || 0); }, 0);
+  const lit = litrosProm(a);
+  return '<div class="card"><h2 class="serif">🍼 Partos y producción</h2><div class="kpis"><div class="kpi v"><small>Partos</small><b>' + ps.length + '</b></div><div class="kpi"><small>Crías nacidas</small><b>' + crias + '</b></div><div class="kpi n"><small>Leche por día</small><b>' + (lit > 0 ? numTxt(Math.round(lit * 10) / 10) + ' L' : '—') + '</b></div></div>' +
+    (ps.length ? ps.slice().reverse().map(function (e) { return '<div class="linea"><div class="nm">' + fechaTxt(e.fecha) + '<small>' + h(e.detalle || '') + '</small></div><span class="tag ' + (e.resultado === 'aborto' || e.resultado === 'muerta' ? 'bajo' : e.resultado === 'prematuro' ? 'sin' : 'ok') + '">' + h(RES_PARTO[e.resultado || 'normal']) + '</span></div>'; }).join('') : '<div class="vacio">Todavía no hay partos anotados.</div>') +
+    '<p class="small muted">Para anotar uno, usa "🍼 Parto" más abajo. Los litros se anotan con "🥛 Litros de leche".</p></div>';
+}
+function tarjetaInversion(a) {
+  if (a.tipo !== 'ternera') return '';
+  const I = invAnimal(a);
+  return '<div class="card"><h2 class="serif">💰 Lo que llevamos invertido</h2>' +
+    '<div class="linea"><div class="nm">Concentrado acumulado<small>' + numTxt(Math.round(I.kg * 10) / 10) + ' kg desde ' + fechaTxt(I.desde) + '</small></div><b class="num">' + money(I.conc) + '</b></div>' +
+    '<div class="linea"><div class="nm">Otros gastos y valor inicial</div><b class="num">' + money(I.otros) + '</b></div>' +
+    '<div class="linea tot"><div class="nm"><b>Total invertido</b></div><b class="num">' + money(I.total) + '</b></div>' +
+    (I.total > 0 ? '<div class="aviso big okc">Para no perder plata, véndela por lo menos en <b>' + money(I.total) + '</b>.<br>Con ' + I.mg + '% de ganancia: <b>' + money(I.sug) + '</b>.</div>' : '') +
+    '<label>Contar el concentrado desde</label><input type="date" id="invDesde" value="' + h(I.desde) + '"><div class="row" style="margin-top:6px"><button class="btn mini sec" data-act="guardardesde">Guardar fecha</button><button class="btn mini sec" data-act="nuevoevento" data-k="gastoAnimal">➕ Anotar un gasto</button></div>' +
+    '<p class="small muted">Cada día suma el concentrado de su etapa (tabla de Raciones) con el último precio por kilo. Si un día le diste otra cantidad, anótalo con "🌾 Alimentación" y ese día cuenta lo que anotaste.</p></div>';
+}
+ACT.guardardesde = async function (b) {
+  const a = animalPor(S.aid); b.disabled = true;
+  try { await guardarReg('animales', Object.assign({}, a, { concDesde: val('invDesde') })); toast('Guardado ✅', 'ok'); render(); } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+const vistaAnimalBase = VISTAS.animal;
+VISTAS.animal = function () {
+  const html = vistaAnimalBase(), a = animalPor(S.aid);
+  if (!a) return html;
+  const mk = '<div class="card"><h2 class="serif">📋 Datos</h2>';
+  return html.replace(mk, function () { return tarjetaEtapa(a) + tarjetaPartos(a) + tarjetaInversion(a) + mk; });
+};
+
+VISTAS.inversion = function () {
+  const ts = animales().filter(function (a) { return a.tipo === 'ternera' && a.estado === 'activo'; });
+  const mg = S.d.cfg.margenTerneras != null && S.d.cfg.margenTerneras !== '' ? +S.d.cfg.margenTerneras : 30;
+  let tot = 0;
+  const filas = ts.map(function (a) {
+    const I = invAnimal(a); tot += I.total;
+    return '<div class="linea" data-act="abriranimal" data-id="' + h(a.id) + '" style="cursor:pointer;align-items:flex-start">' + avatar(a, 44) + '<div class="nm"><b>' + h(a.nombre) + '</b><small>' + h(edadTxt(a)) + ' · ' + h((etapaInfo(a) || {}).nombre || '') + ' · ' + Math.round((etapaInfo(a) || { g: 0 }).g) + ' g/día</small><small>Concentrado ' + money(I.conc) + ' + otros ' + money(I.otros) + '</small></div>' +
+      '<div style="text-align:right"><b class="num">' + money(I.total) + '</b><small class="muted" style="display:block">vender en ≥ ' + money(I.sug) + '</small></div></div>';
+  }).join('');
+  return '<div class="titulo serif">💰 Inversión en terneras</div><div class="kpis"><div class="kpi n"><small>Invertido en total</small><b>' + money(tot) + '</b></div><div class="kpi"><small>Terneras</small><b>' + ts.length + '</b></div></div>' +
+    '<div class="card"><h2 class="serif">¿En cuánto debo venderlas?</h2><p class="small muted" style="margin-top:0">Se suma cada día el concentrado que come cada ternera según su etapa, más los gastos que anotes. Toca una ternera para ver el detalle.</p>' + (filas || '<div class="vacio">No hay terneras.</div>') + '</div>' +
+    '<div class="card"><label>Ganancia que quiero ganar al vender (%)</label><input id="invMg" inputmode="decimal" value="' + h(numTxt(mg)) + '"><label>Precio por kilo del concentrado de terneras, si todavía no lo has comprado ($)</label><input id="invPk" inputmode="numeric" value="' + h(S.d.cfg.precioConcT ? fmtN.format(S.d.cfg.precioConcT) : '') + '" placeholder="Ej: 2.100">' +
+    '<button class="btn full" style="margin-top:8px" data-act="guardarinv">Guardar</button><p class="small muted">Precio por kilo que usa ahora: ' + money(precioKg('t')) + '. Las cuentas usan el precio actual para todos los días.</p></div>';
+};
+ACT.guardarinv = async function (b) {
+  const cfg = JSON.parse(JSON.stringify(S.d.cfg)); cfg.margenTerneras = pq(val('invMg')); cfg.precioConcT = pm(val('invPk'));
+  b.disabled = true;
+  try { await call('guardarConfig', JSON.stringify(cfg)); await cargar(); toast('Guardado ✅', 'ok'); render(); } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+
+VISTAS.raciones = function () {
+  const E = etapas(), act = animales().filter(function (a) { return a.estado === 'activo'; });
+  const grupo = function (g, tit) {
+    return '<div class="card"><h2 class="serif">' + tit + '</h2><div class="scroll"><table class="tabla"><tr><th>Etapa</th><th>g al día</th><th>g por litro</th><th>Hasta (meses)</th><th>Tipo</th></tr>' + E.filter(function (x) { return x.g === g; }).map(function (x) {
+      return '<tr><td>' + h(x.n) + '</td><td><input style="width:70px" inputmode="numeric" id="et_' + x.id + '_c" value="' + h(x.c) + '"></td><td>' + (x.id === 'lactancia' ? '<input style="width:70px" inputmode="numeric" id="et_' + x.id + '_l" value="' + h(x.l) + '">' : '—') + '</td><td>' + (+x.m > 0 ? '<input style="width:60px" inputmode="numeric" id="et_' + x.id + '_m" value="' + h(x.m) + '">' : '—') + '</td><td><select id="et_' + x.id + '_i" style="width:auto">' + opts([['l', 'Lechero'], ['t', 'Terneras y preparto']], x.i) + '</select></td></tr>';
+    }).join('') + '</table></div></div>';
+  };
+  const tot = { l: 0, t: 0 }, filas = act.map(function (a) {
+    const i = etapaInfo(a); if (!i) return ''; tot[i.item] += i.g / 1000;
+    return '<div class="linea" data-act="abriranimal" data-id="' + h(a.id) + '" style="cursor:pointer"><div class="nm">' + h(a.nombre) + '<small>' + h(i.nombre) + (i.manual ? ' (manual)' : '') + '</small></div><b class="num">' + Math.round(i.g) + ' g</b></div>';
+  }).join('');
+  return '<div class="titulo serif">🌾 Raciones por etapa</div><div class="aviso">Aquí está la base de datos: cuántos gramos de concentrado al día recibe cada animal según su etapa. Los números son una guía general: cámbialos con tu veterinario. Cada animal toma la etapa solo (por su edad, preñez, parto y leche) o la pones tú en su hoja de vida.</div>' +
+    grupo('cabra', '🐐 Cabras') + grupo('todas', '🔁 Para cabras y terneras') + grupo('ternera', '🐄 Terneras') +
+    '<div class="card"><label>Empezar el preparto cuántos días antes del parto</label><input id="rcDP" inputmode="numeric" value="' + h(diasPreparto()) + '"><div class="small muted">Las cabras tardan unos 5 meses (150 días) en gestar. 60 días = 2 meses antes.</div>' +
+    '<label>Precio por kilo si aún no has comprado ($): lechero</label><input id="rcPL" inputmode="numeric" value="' + h(S.d.cfg.precioConcL ? fmtN.format(S.d.cfg.precioConcL) : '') + '"><button class="btn full" style="margin-top:10px" data-act="guardaretapas">💾 Guardar la tabla</button></div>' +
+    '<div class="card"><h2 class="serif">¿Qué toca hoy?</h2>' + filas + '<div class="linea tot"><div class="nm"><b>Concentrado lechero al día</b></div><b class="num">' + numTxt(Math.round(tot.l * 100) / 100) + ' kg · ' + money(tot.l * precioKg('l')) + '</b></div><div class="linea tot"><div class="nm"><b>Concentrado de terneras y preparto al día</b></div><b class="num">' + numTxt(Math.round(tot.t * 100) / 100) + ' kg · ' + money(tot.t * precioKg('t')) + '</b></div></div>';
+};
+ACT.guardaretapas = async function (b) {
+  const cfg = JSON.parse(JSON.stringify(S.d.cfg));
+  cfg.etapas = etapas().map(function (x) {
+    const y = Object.assign({}, x), g = function (k) { const e = $('et_' + x.id + '_' + k); return e ? e.value : null; };
+    if (g('c') !== null) y.c = pq(g('c')) || 0;
+    if (g('l') !== null) y.l = pq(g('l')) || 0;
+    if (g('m') !== null) y.m = pq(g('m')) || 0;
+    if (g('i') !== null) y.i = g('i');
+    return y;
+  });
+  cfg.diasPreparto = Math.max(15, Math.round(pq(val('rcDP')) || 60)); cfg.precioConcL = pm(val('rcPL'));
+  b.disabled = true;
+  try { await call('guardarConfig', JSON.stringify(cfg)); await cargar(); toast('Guardado ✅', 'ok'); render(); } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+
+VISTAS.animresumen = function () {
+  const act = animales().filter(function (a) { return a.estado === 'activo'; });
+  const pre = act.filter(function (a) { const r = estadoRepro(a); return r && r.prenada; }).sort(function (a, b) { return estadoRepro(a).parto < estadoRepro(b).parto ? -1 : 1; });
+  const cuenta = {};
+  act.forEach(function (a) { const i = etapaInfo(a); if (i) cuenta[i.nombre] = (cuenta[i.nombre] || 0) + 1; });
+  const al = alertasAnimales();
+  return '<div class="titulo serif">🐐 Hoja de vida de animales</div><div class="kpis"><div class="kpi v"><small>Cabras</small><b>' + act.filter(function (a) { return a.tipo === 'cabra'; }).length + '</b></div><div class="kpi"><small>Terneras</small><b>' + act.filter(function (a) { return a.tipo === 'ternera'; }).length + '</b></div><div class="kpi n"><small>Preñadas</small><b>' + pre.length + '</b></div></div>' +
+    '<div class="card"><h2 class="serif">📣 Avisos</h2>' + (al.length ? al.map(function (x) { return '<div class="alerta ' + x.t + '">' + h(x.txt) + '</div>'; }).join('') : '<div class="vacio">Todo en orden. 🌿</div>') + '</div>' +
+    '<div class="card"><h2 class="serif">🤰 Próximos partos</h2>' + (pre.map(function (a) { const r = estadoRepro(a); return '<div class="linea" data-act="abriranimal" data-id="' + h(a.id) + '" style="cursor:pointer"><div class="nm"><b>' + h(a.nombre) + '</b><small>La preñó ' + h(r.macho || '—') + ' · monta ' + fechaTxt(r.monta) + '</small></div><div style="text-align:right"><b>' + fechaTxt(r.parto) + '</b><small class="muted" style="display:block">' + (r.dias >= 0 ? 'faltan ' + r.dias + ' d' : 'pasó la fecha') + '</small></div></div>'; }).join('') || '<div class="vacio">No hay preñadas anotadas.</div>') + '</div>' +
+    '<div class="card"><h2 class="serif">🏷️ Animales por etapa</h2>' + (Object.keys(cuenta).map(function (k) { return '<div class="linea"><div class="nm">' + h(k) + '</div><b class="num">' + cuenta[k] + '</b></div>'; }).join('') || '<div class="vacio">—</div>') + '<button class="btn sec full" style="margin-top:8px" data-act="ir" data-v="raciones">🌾 Ver y cambiar la tabla de raciones</button></div>';
+};
+
+async function hashClave(s) {
+  s = 'rincon|' + String(s).trim().toLowerCase();
+  try {
+    const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+    return Array.prototype.map.call(new Uint8Array(b), function (x) { return ('0' + x.toString(16)).slice(-2); }).join('');
+  } catch (e) { let x = 5381; for (let i = 0; i < s.length; i++) x = ((x << 5) + x + s.charCodeAt(i)) | 0; return 'c' + x; }
+}
+const DIAS_CONTA = 90;
+function contaOk() {
+  const hs = S.d && S.d.cfg && S.d.cfg.contaHash;
+  if (!hs) return false;
+  let r = null; try { r = JSON.parse(LS.get('rincon_conta') || 'null'); } catch (e) { }
+  if (!r || r.h !== hs || !(r.exp > Date.now())) return false;
+  if (r.exp - Date.now() < (DIAS_CONTA - 1) * 86400000) LS.set('rincon_conta', JSON.stringify({ h: hs, exp: Date.now() + DIAS_CONTA * 86400000 }));
+  return true;
+}
+function contaSesion(hs) { LS.set('rincon_conta', JSON.stringify({ h: hs, exp: Date.now() + DIAS_CONTA * 86400000 })); }
+function pedirConta(cb) {
+  S.contaCb = cb || null;
+  if (!S.d.cfg.contaHash) {
+    modal('<h2>🔒 Crea la contraseña de Contabilidad</h2><p class="small muted">Solo la pedimos una vez: después la app te recuerda en este aparato por ' + DIAS_CONTA + ' días.</p><label>Contraseña (mínimo 4)</label><input id="ctPw" type="password" autocomplete="new-password"><label>Repite la contraseña</label><input id="ctPw2" type="password" autocomplete="new-password"><label>Palabra de recuperación (por si la olvidas)</label><input id="ctRec" placeholder="Ej: nombre de tu primera cabra"><button class="btn full" style="margin-top:12px" data-act="contacrear">Crear y entrar</button>');
+  } else {
+    modal('<h2>🔒 Contabilidad</h2><label>Contraseña</label><input id="ctPw" type="password" autocomplete="current-password"><button class="btn full" style="margin-top:12px" data-act="contaentrar">Entrar</button><p class="small" style="text-align:center;margin-top:10px"><a href="#" data-act="contaolvide" style="color:var(--verde)">Olvidé la contraseña</a></p>');
+  }
+}
+function contaListo() { const f = S.contaCb; S.contaCb = null; cerrarModal(); if (f) f(); else { S.vista = 'inicio'; render(); window.scrollTo(0, 0); } }
+ACT.contacrear = async function (b) {
+  const p = val('ctPw'), rec = val('ctRec').trim();
+  if (p.length < 4) return toast('La contraseña debe tener mínimo 4 caracteres.', 'err');
+  if (p !== val('ctPw2')) return toast('Las dos contraseñas no son iguales.', 'err');
+  if (!rec) return toast('Escribe una palabra de recuperación.', 'err');
+  b.disabled = true;
+  try {
+    const cfg = JSON.parse(JSON.stringify(S.d.cfg)); cfg.contaHash = await hashClave(p); cfg.contaRec = await hashClave(rec);
+    await call('guardarConfig', JSON.stringify(cfg)); await cargar(); contaSesion(cfg.contaHash); contaListo();
+  } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+ACT.contaentrar = async function (b) {
+  const hs = await hashClave(val('ctPw'));
+  if (hs !== S.d.cfg.contaHash) return toast('Contraseña incorrecta.', 'err');
+  contaSesion(hs); contaListo();
+};
+ACT.contaolvide = function () {
+  modal('<h2>Recuperar la contraseña</h2><label>Palabra de recuperación</label><input id="ctRec"><label>Contraseña nueva (mínimo 4)</label><input id="ctPw" type="password"><button class="btn full" style="margin-top:12px" data-act="contareset">Cambiar contraseña</button>');
+};
+ACT.contareset = async function (b) {
+  if (val('ctPw').length < 4) return toast('Mínimo 4 caracteres.', 'err');
+  if ((await hashClave(val('ctRec'))) !== S.d.cfg.contaRec) return toast('Esa no es la palabra de recuperación.', 'err');
+  b.disabled = true;
+  try { const cfg = JSON.parse(JSON.stringify(S.d.cfg)); cfg.contaHash = await hashClave(val('ctPw')); await call('guardarConfig', JSON.stringify(cfg)); await cargar(); contaSesion(cfg.contaHash); contaListo(); }
+  catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+ACT.abrirconta = function () { if (contaOk()) { S.vista = 'inicio'; render(); window.scrollTo(0, 0); } else { pedirConta(null); } };
+ACT.abriranim = function () { S.vista = 'animresumen'; render(); window.scrollTo(0, 0); };
+ACT.cerrarconta = function () { LS.del('rincon_conta'); S.vista = 'portada'; render(); toast('Contabilidad cerrada 🔒', 'ok'); };
+ACT.cambiarclave = function () {
+  modal('<h2>🔑 Cambiar la contraseña</h2><label>Contraseña actual</label><input id="ctPw0" type="password"><label>Contraseña nueva (mínimo 4)</label><input id="ctPw" type="password"><button class="btn full" style="margin-top:12px" data-act="guardarclave">Guardar</button>');
+};
+ACT.guardarclave = async function (b) {
+  if ((await hashClave(val('ctPw0'))) !== S.d.cfg.contaHash) return toast('La contraseña actual no es correcta.', 'err');
+  if (val('ctPw').length < 4) return toast('Mínimo 4 caracteres.', 'err');
+  b.disabled = true;
+  try { const cfg = JSON.parse(JSON.stringify(S.d.cfg)); cfg.contaHash = await hashClave(val('ctPw')); await call('guardarConfig', JSON.stringify(cfg)); await cargar(); contaSesion(cfg.contaHash); cerrarModal(); toast('Contraseña cambiada ✅', 'ok'); }
+  catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+
+VISTAS.portada = function () {
+  const nal = alertasAnimales().length;
+  return '<div style="text-align:center;margin:14px 0 6px"><img src="' + LOGO + '" alt="" style="width:120px"></div><div class="titulo serif" style="justify-content:center">¿A dónde vamos hoy?</div>' +
+    '<button class="card" data-act="abrirconta" style="width:100%;text-align:left;cursor:pointer;border:0"><div class="row" style="flex-wrap:nowrap;align-items:center"><span style="font-size:46px">💼</span><div class="grow"><h2 class="serif" style="margin:0">Contabilidad 🔒</h2><div class="small muted">Ventas, inventario, gastos, caja y balance</div></div></div></button>' +
+    '<button class="card" data-act="abrirenim" style="width:100%;text-align:left;cursor:pointer;border:0"><div class="row" style="flex-wrap:nowrap;align-items:center"><span style="font-size:46px">🐐</span><div class="grow"><h2 class="serif" style="margin:0">Hoja de vida de animales</h2><div class="small muted">Cabras y terneras, preñez, partos, vacunas y raciones' + (nal ? ' · <b>' + nal + ' aviso' + (nal > 1 ? 's' : '') + '</b>' : '') + '</div></div></div></button>';
+};
+ACT.abrirenim = ACT.abriranim;
+
+function ajTxt(x) { return x && +x.v ? '<small>' + (+x.v > 0 ? 'incluye +' : 'incluye ') + money(x.v) + (x.n ? ' · ' + h(x.n) : '') + '</small>' : ''; }
+ACT.editcuadre = function () {
+  const A = S.d.cfg.cuadreAj || {};
+  const fila = function (k, t) { const x = A[k] || {}; return '<div class="card" style="padding:10px"><b>' + t + '</b><div class="grid2"><div><label>Sumar o restar ($)</label><input id="cj_' + k + 'V" inputmode="numeric" value="' + h(x.v ? fmtN.format(x.v) : '') + '" placeholder="Ej: -20.000"></div><div><label>¿Por qué?</label><input id="cj_' + k + 'N" value="' + h(x.n || '') + '"></div></div></div>'; };
+  modal('<h2>✏️ Modificar el cuadre</h2><p class="small muted">Si el sistema no tiene algo, corrígelo aquí. Un número positivo suma a esa línea y uno negativo resta. Queda anotado el motivo.</p>' + fila('ventas', 'Ventas') + fila('gastos', 'Gastos') + fila('compras', 'Compras de inventario') +
+    '<div class="card" style="padding:10px"><b>Otro ajuste</b><div class="grid2"><div><label>Suma o resta a lo que debería haber ($)</label><input id="cj_otroV" inputmode="numeric" value="' + h(A.otro && A.otro.v ? fmtN.format(A.otro.v) : '') + '"></div><div><label>Nombre</label><input id="cj_otroN" value="' + h(A.otro ? A.otro.n || '' : '') + '"></div></div></div>' +
+    '<button class="btn full" data-act="guardarcuadre">Guardar</button><button class="btn sec full" style="margin-top:6px" data-act="borrarcuadre">Quitar todos los ajustes</button>');
+};
+ACT.guardarcuadre = async function (b) {
+  const A = {};
+  ['ventas', 'gastos', 'compras', 'otro'].forEach(function (k) { const v = pm(val('cj_' + k + 'V')); if (v) A[k] = { v: v, n: val('cj_' + k + 'N').trim(), f: hoy() }; });
+  const cfg = JSON.parse(JSON.stringify(S.d.cfg)); cfg.cuadreAj = A; b.disabled = true;
+  try { await call('guardarConfig', JSON.stringify(cfg)); await cargar(); cerrarModal(); toast('Cuadre modificado ✅', 'ok'); render(); } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+ACT.borrarcuadre = async function () {
+  const cfg = JSON.parse(JSON.stringify(S.d.cfg)); cfg.cuadreAj = {};
+  try { await call('guardarConfig', JSON.stringify(cfg)); await cargar(); cerrarModal(); render(); } catch (e) { toast(e.message, 'err'); }
+};
+
+const METAS_K = [['cabras', 'Alimento de animales (concentrado, sal, veterinario)'], ['trab', 'Sueldos y mano de obra'], ['lugar', 'Arriendo, agua y energía'], ['otros', 'Gastos de producción y otros']];
+function metasLista() { return (S.d.cfg.metas && S.d.cfg.metas.length) ? S.d.cfg.metas : METAS_K.map(function (k) { return { n: k[1], v: 0, k: k[0] }; }); }
+function metaFijos(I) {
+  const p = { cabras: 0, trab: 0, lugar: 0, otros: 0 };
+  metasLista().forEach(function (m) { if (p[m.k] !== undefined) p[m.k] += +m.v || 0; });
+  const usa = METAS_K.some(function (k) { return p[k[0]] > 0; });
+  const M = { cabras: p.cabras > 0 ? p.cabras : I.cabras, trab: p.trab > 0 ? p.trab : I.trab, lugar: p.lugar > 0 ? p.lugar : I.lugar, otrosFijos: p.otros > 0 ? p.otros : I.otrosFijos, usa: usa };
+  M.total = M.cabras + M.trab + M.lugar + M.otrosFijos;
+  return M;
+}
+function metasModal(l) {
+  S.metasEd = l;
+  modal('<h2>✏️ Mis gastos fijos del mes</h2><p class="small muted">Escribe cuánto quieres destinar cada mes a cada cosa. Con eso la app calcula cuánto debes vender. Si dejas un valor en 0, usa lo que realmente se ha gastado.</p>' + l.map(function (m, i) {
+    return '<div class="card" style="padding:10px"><label>Nombre</label><input id="mt' + i + 'N" value="' + h(m.n) + '"><div class="grid2"><div><label>Valor al mes ($)</label><input id="mt' + i + 'V" inputmode="numeric" value="' + h(m.v ? fmtN.format(m.v) : '') + '"></div><div><label>Se compara con</label><select id="mt' + i + 'K" style="width:100%">' + opts(METAS_K, m.k) + '</select></div></div><button class="btn mini sec" data-act="quitarmeta" data-i="' + i + '">Quitar</button></div>';
+  }).join('') + '<button class="btn mini sec" data-act="addmeta">➕ Agregar otro gasto fijo</button><button class="btn full" style="margin-top:10px" data-act="guardarmetas">💾 Guardar</button>');
+}
+function leerMetas() { return (S.metasEd || []).map(function (m, i) { return { n: val('mt' + i + 'N').trim() || 'Gasto fijo', v: pm(val('mt' + i + 'V')), k: val('mt' + i + 'K') || 'otros' }; }); }
+ACT.editmetas = function () { metasModal(JSON.parse(JSON.stringify(metasLista()))); };
+ACT.addmeta = function () { const l = leerMetas(); l.push({ n: '', v: 0, k: 'otros' }); metasModal(l); };
+ACT.quitarmeta = function (b) { const l = leerMetas(); l.splice(+b.dataset.i, 1); metasModal(l); };
+ACT.guardarmetas = async function (b) {
+  const cfg = JSON.parse(JSON.stringify(S.d.cfg)); cfg.metas = leerMetas(); b.disabled = true;
+  try { await call('guardarConfig', JSON.stringify(cfg)); await cargar(); cerrarModal(); toast('Guardado ✅', 'ok'); render(); } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+
+const vistaAjustesBase = VISTAS.ajustes;
+VISTAS.ajustes = function () {
+  return vistaAjustesBase() + '<div class="card"><h2 class="serif">🔒 Contabilidad</h2><p class="small muted">La app te recuerda en este aparato por ' + DIAS_CONTA + ' días.</p><div class="row"><button class="btn mini sec" data-act="cambiarclave">🔑 Cambiar contraseña</button><button class="btn mini sec" data-act="cerrarconta">Cerrar Contabilidad ahora</button></div></div>';
+};
+
+const NAVS = [['inicio', '🏠', 'Inicio'], ['vender', '🛒', 'Ventas'], ['inventario', '📦', 'Inventario'], ['animales', '🐐', 'Animales'], ['caja', '💰', 'Caja'], ['ajustes', '⚙️', 'Ajustes']];
+function ponerNav() {
+  const n = $('nav'); if (!n) return;
+  const mo = modoDe(S.vista);
+  n.style.display = mo === '' ? 'none' : '';
+  n.innerHTML = (mo === 'animales' ? NAV_AN : NAV_CO).map(function (x) { return '<button data-act="ir" data-v="' + x[0] + '" data-nav="' + x[0] + '"><span>' + x[1] + '</span>' + x[2] + '</button>'; }).join('');
+  S.modoNav = mo;
+}
 function pintar() {
   if (!S.tok || !S.d) { pintarLogin(); return; }
-  $('app').innerHTML = '<div class="top"><img src="' + LOGO + '" alt=""><div class="tt"><b>El Rincón de Rincón</b><small>La vida en el campo · v' + APP_VER.split(' ')[0] + '</small></div><button class="yo" data-act="ir" data-v="ajustes">👤 ' + h(S.yo.nombre) + '</button></div><main id="main"></main>' +
-    '<nav class="nav">' + NAVS.map(function (n) { return '<button data-act="ir" data-v="' + n[0] + '" data-nav="' + n[0] + '"><span>' + n[1] + '</span>' + n[2] + '</button>'; }).join('') + '</nav>';
-  render();
+  $('app').innerHTML = '<div class="top"><img src="' + LOGO + '" alt=""><div class="tt"><b>El Rincón de Rincón</b><small>La vida en el campo · v' + APP_VER.split(' ')[0] + '</small></div><button class="yo" data-act="ir" data-v="ajustes">👤 ' + h(S.yo.nombre) + '</button></div><main id="main"></main><nav class="nav" id="nav"></nav>';
+  S.modoNav = null; render();
 }
 function render() {
   const m = $('main'); if (!m) return;
+  if (S.tok && S.d) {
+    if (modoDe(S.vista) === 'conta' && !contaOk()) { const v0 = S.vista; S.vista = 'portada'; pedirConta(function () { S.vista = v0; render(); window.scrollTo(0, 0); }); }
+    if (modoDe(S.vista) !== S.modoNav) ponerNav();
+  }
   const f = VISTAS[S.vista] || VISTAS.inicio;
   try { m.innerHTML = barraSub() + f(); if ($('ccMsg')) ccResumen(); } catch (e) { m.innerHTML = '<div class="card"><h2>Ups, algo falló al mostrar esta pantalla</h2><p class="small">' + h(e.message) + '</p></div>'; }
   const act = grupoNav(S.vista);
@@ -2389,8 +3445,8 @@ async function entrarOk(tok, recordar) {
   S.tok = tok;
   if (recordar) LS.set('rincon_sesion', tok);
   await cargar();
-  S.vista = 'inicio'; S.est = null;
-  pintar(); iniciarPoll(); asegurarBase().then(function () { if (S.d && !modalAbierto()) render(); });
+  S.vista = 'portada'; S.est = null;
+  pintar(); iniciarPoll(); asegurarTodo().then(function () { if (S.d && !modalAbierto()) render(); });
 }
 ACT.entrar = async function (b) {
   b.disabled = true;
@@ -2434,6 +3490,7 @@ document.addEventListener('input', function (e) {
   const t = e.target, ds = t.dataset || {};
   if (ds.s === 'bolsaN') { bolsaEst().n = t.value; return; }
   if (ds.s !== undefined) { S[ds.s] = t.value; if (ds.s === 'desc') actualizarVenta(); return; }
+  if (t.id === 'evF') evCalc();
   if (ds.py !== undefined) { const k = ds.pyk; if (PY[k]) { PY[k].vals[ds.py] = t.value; pyTextoPintar(k); } return; }
   if (ds.cs !== undefined) { csEst()[ds.cs] = t.value; csPintar(); return; }
   if (ds.pg !== undefined) { const k = ds.pgk || 'venta'; if (PW[k]) { PW[k].vals[ds.pg] = t.value; pwTextoPintar(k); } return; }
@@ -2441,7 +3498,7 @@ document.addEventListener('input', function (e) {
   if (ds.lp !== undefined) { S.cart[+ds.lp].precio = pm(t.value); actualizarVenta(); return; }
   if (ds.cf !== undefined) {
     S.cf[ds.cf] = t.value;
-    if (ds.cf === 'item') { S.cf.fp = ''; render(); } else { if ($('cfInfo')) $('cfInfo').innerHTML = infoCompra(); pyTextoPintar('gasto'); }
+    if (ds.cf === 'item') { S.cf.fp = ''; render(); } else { if (ds.cf === 'cant' || ds.cf === 'costo' || ds.cf === 'pu' || ds.cf === 'fp') cfSync(ds.cf); if ($('cfInfo')) $('cfInfo').innerHTML = infoCompra(); pyTextoPintar('gasto'); }
     return;
   }
   if (ds.gf !== undefined) { S.gf[ds.gf] = t.value; pyTextoPintar('gasto'); return; }
@@ -2456,6 +3513,7 @@ document.addEventListener('change', function (e) {
   const t = e.target, ds = t.dataset || {};
   if (ds.bal !== undefined) { S.sub.bal[ds.bal] = t.value; render(); return; }
   if (ds.vf !== undefined) { vfInicio()[ds.vf] = t.value; vfPintar(); return; }
+  if (ds.adj !== undefined) { const fl = Array.prototype.slice.call(t.files || []); t.value = ''; adjElegir(ds.adj, fl, ds.tit); return; }
   if (ds.pysel !== undefined) { const w = PY[ds.pysel]; if (w) { if (t.id.indexOf('pya_') === 0) w.a = t.value; else w.b = t.value; } return; }
   if (ds.pwsel !== undefined) { const w = PW[ds.pwsel]; if (w) { if (t.id.indexOf('pwa_') === 0) w.a = t.value; else w.b = t.value; } }
 });
@@ -2485,7 +3543,7 @@ async function boot() {
   const t = LS.get('rincon_sesion');
   if (t) {
     S.tok = t;
-    try { await cargar(); pintar(); iniciarPoll(); asegurarBase().then(function () { if (S.d && !modalAbierto()) render(); }); return; }
+    try { await cargar(); pintar(); iniciarPoll(); asegurarTodo().then(function () { if (S.d && !modalAbierto()) render(); }); return; }
     catch (e) { S.tok = null; S.d = null; LS.del('rincon_sesion'); }
   }
   pintar();
