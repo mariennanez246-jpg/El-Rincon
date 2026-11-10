@@ -293,7 +293,7 @@ function calcular(d) {
     if (l >= 1) costoLeche = g / l;
   }
   const R = d.reg, ev = [];
-  [['co', 'compras'], ['or', 'ordeno'], ['pr', 'produccion'], ['ve', 'ventas'], ['sa', 'salidas'], ['ci', 'conteosInv'], ['en', 'entregasLocal']].forEach(function (p) {
+  [['co', 'compras'], ['or', 'ordeno'], ['pr', 'produccion'], ['ve', 'ventas'], ['sa', 'salidas'], ['ci', 'conteosInv'], ['en', 'entregasLocal'], ['aj', 'ajustesLocal']].forEach(function (p) {
     (R[p[1]] || []).forEach(function (r) { ev.push({ t: p[0], r: r }); });
   });
   ev.sort(function (a, b) { return a.r.fecha < b.r.fecha ? -1 : a.r.fecha > b.r.fecha ? 1 : ((a.r.ts || 0) - (b.r.ts || 0)); });
@@ -317,6 +317,13 @@ function calcular(d) {
     }
     else if (e.t === 'en') {
       const q = +r.cant || 0, c = take(r.item, q), s = lg(r.item); s.q += q; s.v += c;
+    }
+    else if (e.t === 'aj') {
+      (r.lineas || []).forEach(function (l) {
+        const dl = +l.delta || 0, s = lg(l.item);
+        if (dl > 0) { s.v += dl * lavg(l.item); s.q += dl; }
+        else if (dl < 0) { const c = lavg(l.item) * (-dl); s.q += dl; s.v = s.q > 0 ? Math.max(0, s.v - c) : 0; }
+      });
     }
     else if (e.t === 've' && r.lugar === 'local') {
       let tot = 0;
@@ -493,7 +500,7 @@ async function cargar() {
   d.cfg.catInversion = d.cfg.catInversion || [];
   d.cfg.personas = d.cfg.personas || [];
   d.reg = d.reg || {};
-  ['recetario','cierresDia','cierresMes','solicitudes','cierresLocal','entregasLocal','novedades'].forEach(function (k) { d.reg[k] = d.reg[k] || []; });
+  ['recetario','cierresDia','cierresMes','solicitudes','cierresLocal','entregasLocal','novedades', 'ajustesLocal'].forEach(function (k) { d.reg[k] = d.reg[k] || []; });
   S.d = d; S.yo = d.yo; S.ver = d.version; S.c = calcular(d);
 }
 async function guardarReg(tipo, obj) {
@@ -1509,7 +1516,7 @@ function histArmar(D) {
   const pres = [{ id: 'pe-h-0001', hist: true, fecha: D.corte, quien: 'Jefferson', monto: D.jefer[0], medio: '', motivo: 'Saldo anterior: ' + D.jefer[1], devs: [], ts: Date.parse(D.corte) }];
   return { ventas: ventas, gastos: gastos, pres: pres };
 }
-const APP_VER = '3.4 · 9 nov 2026';
+const APP_VER = '3.5 · 10 nov 2026';
 function histEstado(D) {
   const A = histArmar(D), tiene = {};
   S.d.reg.ventas.forEach(function (v) { if (v.hist) tiene[v.id] = v; });
@@ -1787,7 +1794,7 @@ ACT.guardarventa = async function (b) {
     return p && l.precio < costoPres(S.d, S.c, x, p) && costoPres(S.d, S.c, x, p) > 0;
   });
   if (bajos.length && !(await confirmar('Estás vendiendo por debajo del costo: ' + bajos.map(function (l) { return l.nombre; }).join(', ') + '. ¿Guardar igual?', 'Guardar'))) return;
-  const f = (S.yo.rol === 'local' ? null : S.fecha) || hoy(), bo = bolsaEst();
+  const f = (S.yo.rol === 'local' ? (S.fechaPermiso || null) : S.fecha) || hoy(), bo = bolsaEst();
   const rec = Object.assign({}, S.edit || {}, { fecha: f, cliente: S.cliente.trim(), descuento: R.regalo ? sub : pm(S.desc), total: tot,
     pagos: R.pagos.map(function (p) { return { medio: p.medio, valor: p.valor, fecha: f }; }), bolsas: bo.si ? (pq(bo.n) || 1) : 0,
     lineas: S.cart.map(function (l) { return { animal: l.animal || '', item: l.item, pres: l.pres, nombre: l.nombre + (l.presNombre && l.presNombre !== 'Unidad' ? ' · ' + l.presNombre : ''), cant: l.cant, base: l.base, precio: l.precio, emp: l.emp }; }) });
@@ -2043,7 +2050,7 @@ const RAPIDOS = [
 function itemPorNombre(n) { return S.d.items.filter(function (x) { return x.activo !== false && norm(x.nombre) === norm(n); })[0]; }
 function gxIniciar() {
   S.cf = S.cf || { item: '', fp: '', cant: '', costo: '', pu: '', prov: '', nota: '', fecha: hoy() };
-  S.gf = S.gf || { desc: '', cat: 'Otros', valor: '', tipo: 'variable', fecha: hoy() };
+  S.gf = S.gf || { desc: '', cat: 'Otros', valor: '', tipo: 'variable', fecha: hoy(), lugar: 'finca' };
   S.gs = S.gs || { sel: '', tipo: 'gasto' };
   if (!PY.gasto) pyIniciar('gasto', function () { return S.gs.tipo === 'compra' ? pm(S.cf.costo) : pm(S.gf.valor); }, ['mixto', 'fiado', 'fuera']);
 }
@@ -2089,6 +2096,7 @@ function formGx() {
     const cats = d.cfg.gastoCats.concat(d.cfg.catInversion);
     form = '<label>¿En qué se gastó?</label><input data-gf="desc" value="' + h(S.gf.desc) + '" placeholder="Ej: Pago del trabajador de noviembre">' +
       '<div class="grid2"><div><label>Categoría</label><select data-gf="cat">' + opts(cats.map(function (c) { return [c, c]; }), S.gf.cat) + '</select></div><div><label>Valor ($)</label><input inputmode="numeric" data-gf="valor" value="' + h(S.gf.valor) + '" placeholder="Ej: 85.000"></div></div>' +
+      '<label>¿De dónde es este gasto?</label><select data-gf="lugar">' + opts([['finca', '🐐 De la finca'], ['local', '🏪 Del local']], S.gf.lugar || 'finca') + '</select>' +
       '<div class="grid2"><div><label>Es un gasto</label><select data-gf="tipo">' + opts([['fijo', 'Fijo (se paga siempre)'], ['variable', 'Variable (según lo que produzco)'], ['inversion', 'Inversión / ahorro']], S.gf.tipo) + '</select></div><div><label>Fecha</label><input type="date" data-gf="fecha" value="' + h(S.gf.fecha) + '"></div></div>';
   }
   const hist = ed && ed.orig && ed.orig.hist;
@@ -2113,7 +2121,7 @@ ACT.guardargx = async function (b) {
     const v = pm(S.gf.valor);
     if (!S.gf.desc.trim()) return toast('Escribe en qué se gastó.', 'err');
     if (!(v > 0)) return toast('Escribe el valor.', 'err');
-    rec = { fecha: S.gf.fecha || hoy(), desc: S.gf.desc.trim(), cat: S.gf.cat, valor: v, tipo: S.gf.tipo };
+    rec = { fecha: S.gf.fecha || hoy(), desc: S.gf.desc.trim(), cat: S.gf.cat, valor: v, tipo: S.gf.tipo, lugar: S.gf.lugar || 'finca' };
   }
   if (!hist) {
     R = pyResultado('gasto');
@@ -2146,7 +2154,7 @@ ACT.editgx = function (b) {
   S.gx = { t: t, id: r.id, orig: r };
   S.gs = { sel: '', tipo: esC ? 'compra' : 'gasto' };
   if (esC) { S.cf = { item: r.item, fp: '1', cant: numTxt(r.cant), costo: fmtN.format(v), pu: r.cant > 0 ? fmtN.format(Math.round(v / r.cant)) : '', prov: r.proveedor || '', nota: r.nota || '', fecha: r.fecha }; }
-  else { S.gf = { desc: r.desc, cat: r.cat, valor: fmtN.format(v), tipo: tipoGasto(r), fecha: r.fecha }; }
+  else { S.gf = { desc: r.desc, cat: r.cat, valor: fmtN.format(v), tipo: tipoGasto(r), fecha: r.fecha, lugar: r.lugar || 'finca' }; }
   pyIniciar('gasto', function () { return S.gs.tipo === 'compra' ? pm(S.cf.costo) : pm(S.gf.valor); }, ['mixto', 'fiado', 'fuera']);
   const w = PY.gasto;
   if (r.hist) w.modo = 'hist';
@@ -3868,14 +3876,16 @@ const BASE_LOCAL = 100000;
 function esLocal() { return !!(S.yo && S.yo.rol === 'local'); }
 function esTrab() { return !!(S.yo && S.yo.rol === 'trabajador'); }
 function esBasico() { return esLocal() || esTrab(); }
-function vistaInicio() { return esLocal() ? 'lresumen' : esTrab() ? 'hoy' : 'portada'; }
-const NAV_LOCAL = [['lresumen', '🏠', 'Hoy'], ['vender', '🛒', 'Vender'], ['linv', '📦', 'Inventario'], ['lcierre', '💵', 'Cierre'], ['lyo', '👤', 'Yo']];
+function vistaInicio() { return esLocal() ? 'vender' : esTrab() ? 'hoy' : 'portada'; }
+const NAV_LOCAL = [['vender', '🛒', 'Vender'], ['linv', '📦', 'Inventario'], ['lcat', '📖', 'Catálogo'], ['lcaja', '💵', 'Caja del día'], ['lyo', '👤', 'Yo']];
+const NAV_LOC = [['local', '🏪', 'Caja local'], ['pendientes', '🔔', 'Pendientes'], ['portada', '🏡', 'Portada']];
 const NAV_TRAB = [['hoy', '🌅', 'Hoy'], ['animales', '🐐', 'Cabras'], ['ordenoA', '🥛', 'Ordeño'], ['recetario', '📖', 'Recetas'], ['lyo', '👤', 'Yo']];
-const VISTAS_OK = { local: ['lresumen', 'vender', 'linv', 'lcierre', 'lyo', 'recetario', 'ajustes'], trabajador: ['hoy', 'animales', 'terneras', 'animal', 'ordenoA', 'recetario', 'lyo', 'ajustes'] };
-function navPara(mo) { return mo === 'local' ? NAV_LOCAL : mo === 'trab' ? NAV_TRAB : mo === 'animales' ? NAV_AN : NAV_CO; }
+const VISTAS_OK = { local: ['vender', 'linv', 'lcat', 'lcaja', 'lyo', 'ajustes'], trabajador: ['hoy', 'animales', 'terneras', 'animal', 'ordenoA', 'recetario', 'lyo', 'ajustes'] };
+function navPara(mo) { return mo === 'loc' ? NAV_LOC : mo === 'local' ? NAV_LOCAL : mo === 'trab' ? NAV_TRAB : mo === 'animales' ? NAV_AN : NAV_CO; }
 function modoDe(v) {
   if (esLocal()) return 'local';
   if (esTrab()) return 'trab';
+  if (v === 'local' || v === 'pendientes') return 'loc';
   return v === 'portada' ? '' : VISTAS_AN.indexOf(v) >= 0 ? 'animales' : 'conta';
 }
 function nPendientes() {
@@ -3922,7 +3932,9 @@ VISTAS.recetario = (function (base) {
 VISTAS.vender = (function (base) {
   return function () {
     let top = '';
-    if (esLocal()) top = '<div class="aviso big okc">🏪 Estás vendiendo en el <b>local</b>. Lo que vendas sale del inventario del local.</div>';
+    if (esLocal() && !S.fechaPermiso && diaCerrado(hoy()) && !reaperturaOk(hoy())) return '<div class="titulo serif">🔒 Día cerrado</div><div class="card"><p>Ya enviaste el cierre de caja de hoy, por eso no se pueden registrar más ventas.</p><p class="small muted">Si necesitas registrar algo más de hoy, pide permiso a Nataly.</p><button class="btn full" data-act="pedirreabrir" data-f="' + hoy() + '">🔓 Pedir permiso para volver a hoy</button></div>';
+    if (esLocal() && S.fechaPermiso) top = '<div class="aviso big">📅 Estás registrando ventas del <b>' + fechaTxt(S.fechaPermiso) + '</b> (Nataly lo autorizó). <button class="btn mini sec" data-act="finpermiso">Volver a hoy</button></div>';
+    else if (esLocal()) top = '<div class="aviso big okc">🏪 Estás vendiendo en el <b>local</b>. Lo que vendas sale del inventario del local.</div>';
     else if (S.d.cfg.localOn) top = '<div class="card" style="padding:8px 12px"><b>¿Dónde se vende?</b><div class="row" style="margin-top:6px"><button class="btn mini ' + (S.lugarVenta === 'local' ? 'sec' : '') + '" data-act="lugarventa" data-v="">🐐 Finca (mi caja)</button><button class="btn mini ' + (S.lugarVenta === 'local' ? '' : 'sec') + '" data-act="lugarventa" data-v="local">🏪 Local (caja del local)</button></div></div>';
     return top + base();
   };
@@ -3983,37 +3995,90 @@ VISTAS.lyo = function () {
   return '<div class="titulo serif">👤 ' + h(S.yo.nombre) + '</div><div class="card"><p class="small">Perfil: <b>' + (esLocal() ? 'Encargado del local' : 'Trabajador de la finca') + '</b></p><div class="row"><button class="btn sec" data-act="mipin">🔑 Cambiar mi PIN</button><button class="btn sec" data-act="novedad">📣 Contar una novedad</button><button class="btn sec" data-act="salir">Salir</button></div></div>' + misSolicitudes() + '<p class="small muted" style="text-align:center">Versión de la app: ' + APP_VER + '</p>';
 };
 
-VISTAS.lresumen = function () {
-  const f = hoy(), vs = ventasLocal().filter(function (v) { return v.fecha === f; }).sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
-  const cs = S.d.reg.cierresLocal.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); })[0];
-  return '<div class="titulo serif">🏪 Local · ' + h(S.yo.nombre) + '</div>' +
-    (cs && cs.estado === 'pendiente' ? '<div class="aviso">⏳ Tu cierre de caja está esperando que Nataly lo revise.</div>' : '') +
-    (cs && cs.estado === 'rechazado' ? '<div class="aviso bajo">✖ Nataly no aprobó el último cierre. ' + h(cs.resp || '') + '</div>' : '') +
-    '<button class="btn full" data-act="ir" data-v="vender">🛒 Hacer una venta</button>' +
-    '<div class="card"><h2 class="serif">Ventas de hoy (' + vs.length + ')</h2>' + (vs.map(function (v) {
-      return '<div class="linea"><div class="nm"><b>' + h(ventaTxt(v)) + '</b><small>' + h(v.cliente || 'Cliente') + '</small></div><button class="btn mini sec" data-act="pedircorr" data-t="ventas" data-id="' + h(v.id) + '">✏️ Pedir corrección</button></div>';
-    }).join('') || '<div class="vacio">Todavía no hay ventas hoy.</div>') + '</div>' +
-    '<div class="card"><button class="btn sec full" data-act="novedad">📣 Contar una novedad</button></div>' + misSolicitudes();
+function diaCerrado(f) { return S.d.reg.cierresLocal.some(function (c) { return c.fecha === f && c.estado !== 'rechazado'; }); }
+function misSol(tipo, estado) { return (S.d.reg.solicitudes || []).filter(function (x) { return x.por === S.yo.nombre && x.tipo === tipo && (!estado || x.estado === estado); }); }
+function reaperturaOk(f) { return misSol('reabrir', 'aprobada').some(function (x) { return x.fecha === f; }); }
+function solInvLibre() {
+  const usados = (S.d.reg.ajustesLocal || []).map(function (a) { return a.solId; });
+  return misSol('inventario', 'aprobada').filter(function (x) { return usados.indexOf(x.id) < 0; })[0] || null;
+}
+ACT.finpermiso = function () { S.fechaPermiso = null; render(); };
+ACT.usarpermiso = function (b) { S.fechaPermiso = b.dataset.f; S.vista = 'vender'; render(); window.scrollTo(0, 0); };
+ACT.pedirreabrir = function (b) {
+  const ayer = new Date(Date.now() - 86400000 - 5 * 3600000).toISOString().slice(0, 10);
+  modal('<h2>🔓 Volver a un día cerrado</h2><p class="small muted">Para registrar o corregir algo de un día que ya cerraste, Nataly tiene que autorizarlo.</p><label>¿Qué día?</label><input type="date" id="roF" value="' + h(b.dataset.f || ayer) + '" max="' + hoy() + '"><label>¿Por qué?</label><textarea id="roT" rows="3"></textarea><button class="btn full" style="margin-top:10px" data-act="enviarreabrir">Enviar el pedido</button>');
+};
+ACT.enviarreabrir = async function (b) {
+  const f = val('roF'), t = val('roT').trim(); if (!f) return toast('Escoge el día.', 'err'); if (!t) return toast('Cuéntale por qué.', 'err');
+  if (!(await confirmar('¿Enviar a Nataly el pedido para volver al ' + fechaTxt(f) + '?', 'Enviar'))) return;
+  b.disabled = true;
+  try { await guardarReg('solicitudes', { fecha: f, tipo: 'reabrir', resumen: 'Volver al día ' + fechaTxt(f), texto: t, estado: 'pendiente', por: S.yo.nombre, creada: hoy() }); cerrarModal(); toast('Pedido enviado ✅ Nataly lo verá en la app.', 'ok'); render(); }
+  catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+ACT.pedirinv = function () {
+  modal('<h2>📋 Contar o ajustar el inventario</h2><p class="small muted">Para contar o cambiar lo que hay en el local, Nataly tiene que autorizarlo primero.</p><label>¿Para qué?</label><textarea id="ivT" rows="3" placeholder="Ej: Conteo del fin de mes / llegó mercancía nueva"></textarea><button class="btn full" style="margin-top:10px" data-act="enviarpedirinv">Pedir autorización</button>');
+};
+ACT.enviarpedirinv = async function (b) {
+  const t = val('ivT').trim(); if (!t) return toast('Cuéntale para qué.', 'err');
+  if (!(await confirmar('¿Pedirle a Nataly autorización para contar o ajustar el inventario?', 'Pedir'))) return;
+  b.disabled = true;
+  try { await guardarReg('solicitudes', { fecha: hoy(), tipo: 'inventario', resumen: 'Contar o ajustar el inventario del local', texto: t, estado: 'pendiente', por: S.yo.nombre }); cerrarModal(); toast('Pedido enviado ✅', 'ok'); render(); }
+  catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+function itemsLocal() { return S.d.items.filter(function (x) { return x.tipo === 'producto' && x.activo !== false; }); }
+ACT.hacerconteo = function () {
+  const sol = solInvLibre(); if (!sol) return;
+  const L = S.c.loc || {};
+  modal('<h2>📋 Conteo del local</h2><p class="small muted">Escribe cuántas hay de cada producto. Deja vacío lo que no vas a cambiar. Si llegó un producto nuevo, escribe cuántas hay.</p>' + itemsLocal().map(function (x) {
+    return '<div class="linea"><div class="nm"><b>' + h(x.emoji) + ' ' + h(x.nombre) + '</b></div><input id="ct_' + h(x.id) + '" inputmode="decimal" style="width:90px" placeholder="' + h(x.unidad) + '"></div>';
+  }).join('') + '<button class="btn full" style="margin-top:10px" data-act="guardarconteo" data-sol="' + h(sol.id) + '">Enviar el conteo</button>');
+};
+ACT.guardarconteo = async function (b) {
+  const L = S.c.loc || {}, ls = [];
+  itemsLocal().forEach(function (x) { const t = val('ct_' + x.id).trim(); if (t === '') return; const c = pq(t), antes = L[x.id] ? L[x.id].q : 0; if (Math.abs(c - antes) > 0.0000001) ls.push({ item: x.id, nombre: x.nombre, antes: antes, contado: c, delta: c - antes }); });
+  if (!ls.length) return toast('No cambiaste ninguna cantidad.', 'err');
+  if (!(await confirmar('Vas a registrar ' + ls.length + ' cambios en el inventario del local. No se pueden deshacer. ¿Enviar?', 'Enviar'))) return;
+  b.disabled = true;
+  try { await guardarReg('ajustesLocal', { fecha: hoy(), solId: b.dataset.sol, motivo: 'Conteo autorizado', lineas: ls, por: S.yo.nombre }); cerrarModal(); toast('Conteo guardado ✅', 'ok'); render(); }
+  catch (e) { toast(e.message, 'err'); b.disabled = false; }
 };
 VISTAS.linv = function () {
   const L = S.c.loc || {}, l = S.d.items.filter(function (x) { return L[x.id] && L[x.id].q > 0.0000001; });
-  return '<div class="titulo serif">📦 Inventario del local</div><div class="card">' + (l.map(function (x) {
-    return '<div class="linea"><div class="nm"><b>' + h(x.emoji) + ' ' + h(x.nombre) + '</b></div><b class="num">' + qty(L[x.id].q, x.unidad) + '</b></div>';
-  }).join('') || '<div class="vacio">No hay productos en el local. Nataly te los entrega desde la finca.</div>') + '</div><div class="card"><button class="btn sec full" data-act="novedad">📣 Avisar si falta algo o se dañó</button></div>';
+  const lib = solInvLibre(), pend = misSol('inventario', 'pendiente')[0];
+  return '<div class="titulo serif">📦 Inventario del local</div>' +
+    (lib ? '<div class="aviso big okc">✅ Nataly autorizó el conteo. <button class="btn mini" data-act="hacerconteo">Hacer el conteo</button></div>' : pend ? '<div class="aviso">⏳ Esperando que Nataly autorice el conteo.</div>' : '') +
+    '<div class="card">' + (l.map(function (x) {
+      return '<div class="linea"><div class="nm"><b>' + h(x.emoji) + ' ' + h(x.nombre) + '</b></div><b class="num">' + qty(L[x.id].q, x.unidad) + '</b></div>';
+    }).join('') || '<div class="vacio">No hay productos en el local. Nataly te los entrega desde la finca.</div>') + '</div>' +
+    '<div class="card">' + (!lib && !pend ? '<button class="btn full" data-act="pedirinv">📋 Pedir permiso para contar o ajustar</button>' : '') + '<button class="btn sec full" style="margin-top:6px" data-act="novedad">📣 Avisar si falta algo o se dañó</button></div>';
 };
-VISTAS.lcierre = function () {
+VISTAS.lcat = function () {
+  const L = S.c.loc || {};
+  return '<div class="titulo serif">📖 Catálogo de productos</div><div class="card">' + (itemsLocal().map(function (x) {
+    return '<div class="linea"><div class="nm"><b>' + h(x.emoji) + ' ' + h(x.nombre) + '</b><small>' + (x.pres || []).map(function (p) { return h(p.nombre) + (+p.precio ? ' ' + money(p.precio) : ''); }).join(' · ') + '</small></div><b class="num">' + qty(L[x.id] ? Math.max(0, L[x.id].q) : 0, x.unidad) + '</b></div>';
+  }).join('') || '<div class="vacio">Sin productos.</div>') + '</div>';
+};
+VISTAS.lcaja = function () {
+  const f = hoy(), vs = ventasLocal().filter(function (v) { return v.fecha === f; }).sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
   const mis = S.d.reg.cierresLocal.slice().sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); });
-  const pend = mis.filter(function (c) { return c.estado === 'pendiente'; })[0];
-  return '<div class="titulo serif">💵 Cierre de caja</div>' + (pend
-    ? '<div class="card"><p>⏳ Ya enviaste el cierre de <b>' + money(pend.contado) + '</b>. Nataly lo va a revisar y te dirá cuánta plata queda en el local.</p></div>'
-    : '<div class="card"><p class="small muted">Cuenta toda la plata en <b>efectivo</b> que hay en la caja del local (con la base incluida) y escribe el total. Nataly revisa si cuadra.</p><label>Plata en efectivo contada ($)</label><input id="lcC" inputmode="numeric" placeholder="Ej: 250.000"><label>Nota (opcional)</label><input id="lcN"><button class="btn full" style="margin-top:10px" data-act="enviarcierre">Enviar cierre a Nataly</button></div>') +
+  const pend = mis.filter(function (c) { return c.estado === 'pendiente'; })[0], cerr = diaCerrado(f);
+  const perm = misSol('reabrir', 'aprobada').filter(function (x) { return x.fecha !== f || cerr; });
+  const rech = mis[0] && mis[0].estado === 'rechazado' ? mis[0] : null;
+  return '<div class="titulo serif">💵 Caja del día · ' + fechaTxt(f) + '</div>' +
+    (rech ? '<div class="aviso bajo">✖ Nataly no aprobó el último cierre. ' + h(rech.resp || '') + '</div>' : '') +
+    '<div class="card"><h2 class="serif">Ventas de hoy (' + vs.length + ')</h2>' + (vs.map(function (v) {
+      return '<div class="linea"><div class="nm"><b>' + h(ventaTxt(v)) + '</b><small>' + h(v.cliente || 'Cliente') + '</small></div><button class="btn mini sec" data-act="pedircorr" data-t="ventas" data-id="' + h(v.id) + '">✏️ Pedir corrección</button></div>';
+    }).join('') || '<div class="vacio">Todavía no hay ventas hoy.</div>') + '</div>' +
+    (pend ? '<div class="card"><p>⏳ Ya enviaste el cierre de <b>' + money(pend.contado) + '</b>. Nataly lo va a revisar y te dirá cuánta plata queda en el local.</p></div>' : cerr ? '<div class="card"><p>🔒 El día de hoy ya está cerrado.</p></div>'
+      : '<div class="card"><h2 class="serif">Cerrar el día</h2><p class="small muted">Cuenta toda la plata en <b>efectivo</b> que hay en la caja del local (con la base incluida) y escribe el total. Nataly revisa si cuadra.</p><label>Plata en efectivo contada ($)</label><input id="lcC" inputmode="numeric" placeholder="Ej: 250.000"><label>Nota (opcional)</label><input id="lcN"><button class="btn full" style="margin-top:10px" data-act="enviarcierre">Cerrar la caja y enviar a Nataly</button></div>') +
+    '<div class="card"><h2 class="serif">¿Un día que ya cerraste?</h2><p class="small muted">Para registrar o corregir algo de un día cerrado hay que pedir permiso.</p>' + perm.map(function (x) { return '<div class="aviso okc">✅ Autorizado: ' + fechaTxt(x.fecha) + ' <button class="btn mini" data-act="usarpermiso" data-f="' + h(x.fecha) + '">Registrar ventas de ese día</button></div>'; }).join('') + '<button class="btn sec full" data-act="pedirreabrir">🔓 Pedir permiso para volver a un día</button></div>' +
     '<div class="card"><h2 class="serif">Mis cierres</h2>' + (mis.slice(0, 10).map(function (c) {
       return '<div class="linea"><div class="nm"><b>' + fechaTxt(c.fecha) + ' · ' + money(c.contado) + '</b><small>' + (c.estado === 'aprobado' ? 'Quedó en el local: ' + money(c.queda) : h(c.resp || '')) + '</small></div>' + estadoTag(c.estado) + '</div>';
-    }).join('') || '<div class="vacio">Aún no has enviado cierres.</div>') + '</div>';
+    }).join('') || '<div class="vacio">Aún no has enviado cierres.</div>') + '</div>' + misSolicitudes();
 };
 ACT.enviarcierre = async function (b) {
   const v = pm(val('lcC')); if (!(v >= 0) || val('lcC').trim() === '') return toast('Escribe cuánta plata contaste.', 'err');
-  if (!(await confirmar('Vas a enviar el cierre con ' + money(v) + ' en efectivo. Después no lo puedes cambiar. ¿Enviar?', 'Enviar'))) return;
+  if (!(await confirmar('Vas a enviar el cierre con ' + money(v) + ' en efectivo. Después el día queda cerrado y no lo puedes cambiar. ¿Enviar?', 'Enviar'))) return;
   b.disabled = true;
   try { await guardarReg('cierresLocal', { fecha: hoy(), contado: v, nota: val('lcN').trim(), estado: 'pendiente', por: S.yo.nombre }); toast('Cierre enviado ✅', 'ok'); render(); }
   catch (e) { toast(e.message, 'err'); b.disabled = false; }
@@ -4033,8 +4098,10 @@ VISTAS.pendientes = function () {
         '<div class="row"><button class="btn" data-act="aprobarcierre" data-id="' + h(c.id) + '">✅ Aprobar</button><button class="btn sec" data-act="rechazarcierre" data-id="' + h(c.id) + '">✖ Rechazar</button></div></div>';
     }).join('')) +
     (ss.map(function (x) {
-      return '<div class="card"><h2 class="serif">✏️ Pide una corrección</h2><p class="small muted" style="margin:0">' + h(x.por || '') + ' · ' + fechaTxt(x.fecha) + '</p><div class="aviso">' + h(x.resumen || '') + '</div><p><b>' + h(x.texto) + '</b></p>' +
-        '<div class="row"><button class="btn mini" data-act="solaprobar" data-id="' + h(x.id) + '">✅ Autorizar (yo la corrijo)</button><button class="btn mini sec" data-act="solborrar" data-id="' + h(x.id) + '">🗑️ Autorizar y borrar ese registro</button><button class="btn mini sec" data-act="solrechazar" data-id="' + h(x.id) + '">✖ Rechazar</button></div></div>';
+      const t = x.tipo === 'reabrir' ? '🔓 Pide volver a un día cerrado' : x.tipo === 'inventario' ? '📋 Pide contar o ajustar el inventario' : '✏️ Pide una corrección';
+      return '<div class="card"><h2 class="serif">' + t + '</h2><p class="small muted" style="margin:0">' + h(x.por || '') + ' · ' + fechaTxt(x.creada || x.fecha) + '</p><div class="aviso">' + h(x.resumen || '') + '</div><p><b>' + h(x.texto) + '</b></p>' +
+        (x.tipo === 'correccion' ? '<div class="row"><button class="btn mini" data-act="solaprobar" data-id="' + h(x.id) + '">✅ Autorizar (yo la corrijo)</button><button class="btn mini sec" data-act="solborrar" data-id="' + h(x.id) + '">🗑️ Autorizar y borrar ese registro</button><button class="btn mini sec" data-act="solrechazar" data-id="' + h(x.id) + '">✖ Rechazar</button></div>'
+          : '<div class="row"><button class="btn mini" data-act="solaprobar" data-id="' + h(x.id) + '">✅ Autorizar</button><button class="btn mini sec" data-act="solrechazar" data-id="' + h(x.id) + '">✖ Rechazar</button></div>') + '</div>';
     }).join('')) +
     (!cs.length && !ss.length ? '<div class="card"><div class="vacio">No hay nada pendiente 🎉</div></div>' : '') +
     '<div class="card"><h2 class="serif">📣 Novedades recientes</h2>' + (nv.map(function (r) { return '<div class="linea"><div class="nm"><b>' + h(r.texto) + '</b><small>' + fechaTxt(r.fecha) + ' · ' + h(r.por || '') + (r.animalNombre ? ' · ' + h(r.animalNombre) : '') + '</small></div></div>'; }).join('') || '<div class="vacio">Sin novedades.</div>') + '</div>';
@@ -4068,7 +4135,7 @@ async function resolverSol(id, estado, borrar) {
   if (borrar && !(await confirmar('Se borra ese registro para siempre. ¿Seguro?', 'Borrar'))) return;
   try {
     if (borrar) await borrarReg(x.sobre, x.regId);
-    await guardarReg('solicitudes', Object.assign({}, x, { estado: estado, resp: borrar ? 'Borrado por ' + S.yo.nombre : estado === 'aprobada' ? 'Autorizada, ya la corrijo' : 'No se aprobó' }));
+    await guardarReg('solicitudes', Object.assign({}, x, { estado: estado, resp: borrar ? 'Borrado por ' + S.yo.nombre : estado === 'aprobada' ? (x.tipo === 'correccion' ? 'Autorizada, ya la corrijo' : 'Autorizado') : 'No se aprobó' }));
     toast('Listo ✅', 'ok'); render();
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -4114,10 +4181,54 @@ ACT.guardarentrega = async function (b) {
 const portadaBaseL = VISTAS.portada;
 VISTAS.portada = function () {
   const n = nPendientes();
-  return (n ? '<button class="card" data-act="ir" data-v="pendientes" style="width:100%;text-align:left;cursor:pointer;border:0;background:#FFF3D6"><b>🔔 Tienes ' + n + (n === 1 ? ' cosa' : ' cosas') + ' por revisar</b><br><small>Cierres del local y pedidos de corrección</small></button>' : '') +
+  return (n ? '<button class="card" data-act="ir" data-v="pendientes" style="width:100%;text-align:left;cursor:pointer;border:0;background:#FFF3D6"><b>🔔 Tienes ' + n + (n === 1 ? ' cosa' : ' cosas') + ' por revisar</b><br><small>Cierres, correcciones y permisos del local</small></button>' : '') +
     portadaBaseL() +
-    '<div class="row" style="justify-content:center;margin:8px 0"><button class="btn mini sec" data-act="ir" data-v="local">🏪 Local</button><button class="btn mini sec" data-act="ir" data-v="pendientes">🔔 Pendientes</button></div>';
+    '<button class="card" data-act="ir" data-v="local" style="width:100%;text-align:left;cursor:pointer;border:0"><div class="row" style="flex-wrap:nowrap;align-items:center"><span style="font-size:46px">🏪</span><div class="grow"><h2 class="serif" style="margin:0">Caja del local 🔒</h2><div class="small muted">Ventas, inventario y cierre de caja del local</div></div></div></button>';
 };
+
+const PERF = { anim: { h: 'animHash', r: 'animRec', t: 'Hoja de vida de animales' }, loc: { h: 'locHash', r: 'locRec', t: 'Caja del local' } };
+function perfilOk(k) {
+  const hs = S.d && S.d.cfg && S.d.cfg[PERF[k].h]; if (!hs) return false;
+  let r = null; try { r = JSON.parse(LS.get('rincon_p_' + k) || 'null'); } catch (e) { }
+  if (!r || r.h !== hs || !(r.exp > Date.now())) return false;
+  return true;
+}
+function perfilSesion(k, hs) { LS.set('rincon_p_' + k, JSON.stringify({ h: hs, exp: Date.now() + DIAS_CONTA * 86400000 })); }
+function pedirPerfil(k, cb) {
+  S.pfCb = cb || null; S.pfK = k;
+  if (!S.d.cfg[PERF[k].h]) modal('<h2>🔒 Crea la contraseña de ' + PERF[k].t + '</h2><p class="small muted">Solo la pedimos una vez: después la app te recuerda en este aparato por ' + DIAS_CONTA + ' días.</p><label>Contraseña (mínimo 4)</label><input id="pfPw" type="password"><label>Repite la contraseña</label><input id="pfPw2" type="password"><label>Palabra de recuperación (por si la olvidas)</label><input id="pfRec"><button class="btn full" style="margin-top:12px" data-act="pfcrear">Crear y entrar</button>');
+  else modal('<h2>🔒 ' + PERF[k].t + '</h2><label>Contraseña</label><input id="pfPw" type="password"><button class="btn full" style="margin-top:12px" data-act="pfentrar">Entrar</button><p class="small" style="text-align:center;margin-top:8px"><a href="#" data-act="pfolvide">Olvidé la contraseña</a></p>');
+}
+function pfListo() { const f = S.pfCb, k = S.pfK; S.pfCb = null; cerrarModal(); if (f) f(); else { S.vista = k === 'anim' ? 'animresumen' : 'local'; render(); window.scrollTo(0, 0); } }
+ACT.pfcrear = async function (b) {
+  const k = S.pfK, p = val('pfPw'), rec = val('pfRec').trim();
+  if (p.length < 4) return toast('La contraseña debe tener mínimo 4 caracteres.', 'err');
+  if (p !== val('pfPw2')) return toast('Las dos contraseñas no son iguales.', 'err');
+  if (!rec) return toast('Escribe una palabra de recuperación.', 'err');
+  b.disabled = true;
+  try { const cfg = JSON.parse(JSON.stringify(S.d.cfg)); cfg[PERF[k].h] = await hashClave(p); cfg[PERF[k].r] = await hashClave(rec); await call('guardarConfig', JSON.stringify(cfg)); await cargar(); perfilSesion(k, cfg[PERF[k].h]); pfListo(); }
+  catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+ACT.pfentrar = async function () {
+  const k = S.pfK, hs = await hashClave(val('pfPw'));
+  if (hs !== S.d.cfg[PERF[k].h]) return toast('Contraseña incorrecta.', 'err');
+  perfilSesion(k, hs); pfListo();
+};
+ACT.pfolvide = function () {
+  modal('<h2>Recuperar la contraseña</h2><label>Palabra de recuperación</label><input id="pfRec"><label>Contraseña nueva (mínimo 4)</label><input id="pfPw" type="password"><button class="btn full" style="margin-top:12px" data-act="pfreset">Cambiar contraseña</button>');
+};
+ACT.pfreset = async function (b) {
+  const k = S.pfK;
+  if (val('pfPw').length < 4) return toast('Mínimo 4 caracteres.', 'err');
+  if ((await hashClave(val('pfRec'))) !== S.d.cfg[PERF[k].r]) return toast('Esa no es la palabra de recuperación.', 'err');
+  b.disabled = true;
+  try { const cfg = JSON.parse(JSON.stringify(S.d.cfg)); cfg[PERF[k].h] = await hashClave(val('pfPw')); await call('guardarConfig', JSON.stringify(cfg)); await cargar(); perfilSesion(k, cfg[PERF[k].h]); pfListo(); }
+  catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+function perfilNecesario() {
+  const m = modoDe(S.vista);
+  return m === 'animales' ? 'anim' : m === 'loc' ? 'loc' : '';
+}
 
 ACT.activarclaves = function () {
   S.wz = S.wz || { nombre: S.yo.nombre, personas: [{ nombre: 'Jefferson', rol: 'supervisor', pin: '' }] };
@@ -4153,6 +4264,211 @@ VISTAS.ajustes = (function (base) {
   };
 })(VISTAS.ajustes);
 
+const AN_DESDE = '2026-11';
+const MESES_N = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+function mesTxt(m) { return MESES_N[+m.slice(5, 7) - 1] + ' ' + m.slice(0, 4); }
+function mesDe(f) { return String(f || '').slice(0, 7); }
+function anCfg() { const b = S.d.cfg.analisis || {}; return { metas: b.metas || {}, nomina: b.nomina || { finca: [], local: [] }, notas: b.notas || [] }; }
+function anLugarDe(v) { return v.lugar === 'local' ? 'local' : 'finca'; }
+function anMeses() {
+  const hm = mesDe(hoy()), l = []; let y = +AN_DESDE.slice(0, 4), m = +AN_DESDE.slice(5, 7);
+  for (let i = 0; i < 60; i++) { const k = y + '-' + ('0' + m).slice(-2); if (k > hm) break; l.push(k); m++; if (m > 12) { m = 1; y++; } }
+  return l.length ? l : [AN_DESDE];
+}
+function anMes(mes) { return { y: +mes.slice(0, 4), m: +mes.slice(5, 7) }; }
+function anDiasMes(mes) { const o = anMes(mes); return new Date(o.y, o.m, 0).getDate(); }
+function anLug(lugar) { return lugar === 'uni' ? ['finca', 'local'] : [lugar]; }
+
+function anDatos(lugar, mes) {
+  const R = S.d.reg, c = S.c, cfg = anCfg(), lugs = anLug(lugar);
+  let ventas = 0, costo = 0, nv = 0; const prod = {};
+  R.ventas.forEach(function (v) {
+    if (mesDe(v.fecha) !== mes || lugs.indexOf(anLugarDe(v)) < 0 || v.regalo) return;
+    const t = +v.total || 0, vc = c.vc[v.id]; ventas += t; nv++; costo += vc ? (+vc.total || 0) : 0;
+    (v.lineas || []).forEach(function (l, i) {
+      const k = l.nombre || l.item; if (!k) return;
+      const p = prod[k] || (prod[k] = { nombre: k, ing: 0, cost: 0, cant: 0 });
+      p.ing += (+l.cant || 0) * (+l.precio || 0); p.cost += vc && vc.lineas ? (+vc.lineas[i] || 0) : 0; p.cant += +l.cant || 0;
+    });
+  });
+  let gastos = 0; const cats = {};
+  R.gastos.forEach(function (g) {
+    if (mesDe(g.fecha) !== mes || lugs.indexOf(g.lugar === 'local' ? 'local' : 'finca') < 0) return;
+    if (g.tipo === 'inversion' || (S.d.cfg.catInversion || []).indexOf(g.cat) >= 0) return;
+    const v = +g.valor || 0; gastos += v; cats[g.cat || 'Otros'] = (cats[g.cat || 'Otros'] || 0) + v;
+  });
+  let mo = 0, personas = 0;
+  lugs.forEach(function (l) { (cfg.nomina[l] || []).forEach(function (p) { mo += +p.s || 0; personas++; }); });
+  let meta = 0, metaOk = false;
+  lugs.forEach(function (l) { const x = (cfg.metas[l] || {})[mes]; if (+x > 0) { meta += +x; metaOk = true; } });
+  const gb = ventas - costo, margen = ventas > 0 ? gb / ventas : null, fijos = gastos + mo;
+  const pe = margen && margen > 0 ? fijos / margen : null, final = gb - fijos;
+  const dm = anDiasMes(mes), esAct = mes === mesDe(hoy()), dia = esAct ? +hoy().slice(8, 10) : dm;
+  const prom = dia > 0 ? ventas / dia : 0, proy = prom * dm;
+  const lista = Object.keys(prod).map(function (k) { const p = prod[k]; p.gan = p.ing - p.cost; p.mg = p.ing > 0 ? p.gan / p.ing : null; return p; }).sort(function (a, b) { return b.gan - a.gan; });
+  return { lugar: lugar, mes: mes, ventas: ventas, costo: costo, nv: nv, gb: gb, margen: margen, gastos: gastos, cats: cats, mo: mo, personas: personas, fijos: fijos, pe: pe, final: final, meta: meta, metaOk: metaOk, dm: dm, dia: dia, esAct: esAct, prom: prom, proy: proy, prods: lista };
+}
+function anSemaforo(D) {
+  const falta = [];
+  if (!(D.mo > 0)) falta.push('la mano de obra');
+  if (!(D.gastos > 0)) falta.push('los gastos');
+  let col = 'gris', txt;
+  if (!(D.ventas > 0)) txt = 'Todavía no hay ventas registradas en ' + mesTxt(D.mes) + '.';
+  else if (D.pe === null) { col = 'rojo'; txt = 'Lo que vendes no deja ganancia sobre el costo (el margen es cero o negativo). Revisa los precios.'; }
+  else if (D.final >= 0) { col = 'verde'; txt = 'Este mes SÍ se está pagando: ya cubriste los costos y te quedan ' + money(D.final) + ' de ganancia.'; }
+  else if (D.proy >= D.pe || D.ventas >= 0.7 * D.pe) { col = 'amarillo'; txt = 'Todavía NO se paga, pero vas cerca: llevas ' + money(D.ventas) + ' de ' + money(D.pe) + ' que necesitas.'; }
+  else { col = 'rojo'; txt = 'Este mes NO se está pagando: llevas ' + money(D.ventas) + ' y necesitas vender ' + money(D.pe) + ' para no perder.'; }
+  return { col: col, txt: txt, falta: falta };
+}
+const SEM = { verde: ['🟢', '#d6f2dd'], amarillo: ['🟡', '#fff1c7'], rojo: ['🔴', '#fbd9d6'], gris: ['⚪', '#eee'] };
+function anBarra(p, color) {
+  p = Math.max(0, Math.min(1.5, p || 0));
+  return '<div style="background:#eee;border-radius:8px;height:16px;position:relative;overflow:hidden"><div style="width:' + Math.min(100, p * 100) + '%;background:' + color + ';height:100%"></div></div>';
+}
+function anSugerencias(D) {
+  const s = [], pa = anPrevMes(D.mes);
+  if (D.ventas > 0 && D.mo > 0 && D.mo / D.ventas > 0.4) s.push('La mano de obra pesa el ' + Math.round(D.mo / D.ventas * 100) + '% de lo que vendes. Lo normal es que no pase del 30–40%.');
+  if (D.margen !== null && D.margen < 0.3 && D.ventas > 0) s.push('El margen es bajo (' + Math.round(D.margen * 100) + '%). Revisa precios o costos de lo que más vendes.');
+  D.prods.forEach(function (p) { if (D.ventas > 0 && p.ing / D.ventas > 0.1 && p.mg !== null && p.mg < 0.15) s.push(p.nombre + ' vende bastante pero deja poco (' + Math.round(p.mg * 100) + '% de ganancia). Mira si conviene subirle el precio.'); });
+  if (pa) {
+    const P = anDatos(D.lugar, pa);
+    Object.keys(D.cats).forEach(function (k) { if (P.cats[k] > 0 && D.cats[k] > P.cats[k] * 1.2) s.push('El gasto en ' + k + ' subió ' + Math.round((D.cats[k] / P.cats[k] - 1) * 100) + '% frente a ' + mesTxt(pa) + '. Revísalo.'); });
+  }
+  if (D.esAct && D.pe && D.ventas > 0 && D.proy < D.pe) {
+    const rest = D.dm - D.dia, nec = rest > 0 ? Math.max(0, (D.pe - D.ventas) / rest) : 0;
+    s.push('Al ritmo de hoy cerrarías el mes en ' + money(D.proy) + ' y necesitas ' + money(D.pe) + '. Para llegar tendrías que vender ' + money(nec) + ' por día lo que resta del mes.');
+  }
+  if (D.metaOk && D.esAct && D.ventas > 0) s.push('Meta del mes: llevas el ' + Math.round(D.ventas / D.meta * 100) + '% (' + money(D.ventas) + ' de ' + money(D.meta) + '). Al ritmo actual cerrarías en ' + money(D.proy) + '.');
+  return s;
+}
+function anPrevMes(mes) { const o = anMes(mes); let y = o.y, m = o.m - 1; if (m < 1) { m = 12; y--; } const k = y + '-' + ('0' + m).slice(-2); return k >= AN_DESDE ? k : ''; }
+
+function anSvg(lugar) {
+  const ms = anMeses(), D = ms.map(function (m) { return anDatos(lugar, m); });
+  const mx = Math.max.apply(null, D.map(function (d) { return Math.max(d.ventas, d.costo + d.fijos, Math.abs(d.final)); }).concat([1]));
+  const w = 300, hh = 120, gw = Math.max(60, Math.min(120, (w - 20) / D.length)), bw = gw / 4;
+  let o = '<svg viewBox="0 0 ' + Math.max(w, 20 + gw * D.length) + ' ' + (hh + 30) + '" style="width:100%;height:auto" role="img" aria-label="Ventas, costos y ganancia por mes">';
+  D.forEach(function (d, i) {
+    const x0 = 10 + i * gw;
+    [[d.ventas, '#2f8f4e'], [d.costo + d.fijos, '#e8761a'], [Math.max(0, d.final), '#2b6cb0']].forEach(function (b, j) {
+      const bh = b[0] / mx * hh;
+      o += '<rect x="' + (x0 + j * (bw + 3)) + '" y="' + (hh - bh) + '" width="' + bw + '" height="' + Math.max(bh, 0.5) + '" rx="3" fill="' + b[1] + '"></rect>';
+    });
+    o += '<text x="' + (x0 + gw / 2 - 8) + '" y="' + (hh + 16) + '" text-anchor="middle" font-size="10" fill="#555">' + MESES_N[+d.mes.slice(5, 7) - 1].slice(0, 3) + '</text>';
+  });
+  return o + '</svg><div class="small muted" style="display:flex;gap:12px;flex-wrap:wrap"><span><b style="color:#2f8f4e">■</b> Ventas</span><span><b style="color:#e8761a">■</b> Costos y gastos</span><span><b style="color:#2b6cb0">■</b> Ganancia</span></div>';
+}
+function anPorQue(D) {
+  return '<details><summary class="small">¿Cómo se calculó?</summary><p class="small muted" style="margin:6px 0">' +
+    '<b>Ventas</b>: suma de las ' + D.nv + ' ventas de ' + mesTxt(D.mes) + ' (sin las regaladas).<br>' +
+    '<b>Lo que costó lo vendido</b>: costo de los productos que salieron del inventario, según lo que pagaste por ellos.<br>' +
+    '<b>Gastos</b>: gastos anotados en el mes, sin inversiones ni ahorros.<br>' +
+    '<b>Mano de obra</b>: la nómina mensual que escribiste (' + D.personas + ' personas).<br>' +
+    '<b>Equilibrio</b> = (gastos + mano de obra) ÷ margen. Es lo que debes vender para no perder.<br>' +
+    '<b>Ritmo</b>: ventas ÷ días transcurridos × días del mes.</p></details>';
+}
+function anNumeros(D) {
+  const f = function (a, b, neg) { return '<div class="linea"><div class="nm">' + a + '</div><b class="num"' + (neg ? ' style="color:#b33"' : '') + '>' + b + '</b></div>'; };
+  return f('Ventas', money(D.ventas)) + f('− Lo que costó lo vendido', money(D.costo)) +
+    f('= Ganancia bruta' + (D.margen !== null ? ' (' + Math.round(D.margen * 100) + '%)' : ''), money(D.gb)) +
+    f('− Gastos del mes', money(D.gastos)) + f('− Mano de obra', money(D.mo)) +
+    f('<b>= Ganancia final</b>', '<b>' + money(D.final) + '</b>', D.final < 0);
+}
+function anPanel(lugar) {
+  const mes = S.an.mes, D = anDatos(lugar, mes), sm = anSemaforo(D), cfgE = S.yo.rol === 'admin', sg = anSugerencias(D);
+  const nombre = lugar === 'finca' ? '🐐 Finca' : '🏪 Local';
+  return '<div class="card" style="background:' + SEM[sm.col][1] + '"><h2 class="serif" style="margin:0">' + SEM[sm.col][0] + ' ' + nombre + ' · ' + mesTxt(mes) + '</h2><p style="margin:6px 0 0"><b>' + h(sm.txt) + '</b></p>' +
+    (sm.falta.length ? '<p class="small" style="margin:6px 0 0">⚠️ Análisis incompleto: falta anotar ' + sm.falta.join(' y ') + '.</p>' : '') + '</div>' +
+    '<div class="card"><h2 class="serif">Resultado del mes</h2>' + anNumeros(D) + anPorQue(D) + '</div>' +
+    '<div class="card"><h2 class="serif">Punto de equilibrio</h2>' + (D.pe ? '<p class="small muted" style="margin:0 0 6px">Para no perder debes vender <b>' + money(D.pe) + '</b> en el mes. Llevas <b>' + money(D.ventas) + '</b> (' + Math.round(D.ventas / D.pe * 100) + '%).</p>' + anBarra(D.ventas / D.pe, D.ventas >= D.pe ? '#2f8f4e' : '#e8761a') : '<p class="small muted">Aún no se puede calcular (faltan ventas o costos).</p>') + '</div>' +
+    '<div class="card"><h2 class="serif">Meta del mes</h2>' + (D.metaOk ? '<p class="small muted" style="margin:0 0 6px">Meta <b>' + money(D.meta) + '</b>. Llevas <b>' + money(D.ventas) + '</b> (' + Math.round(D.ventas / D.meta * 100) + '%). Promedio por día: ' + money(D.prom) + (D.esAct ? ' · al ritmo actual cerrarías en <b>' + money(D.proy) + '</b>' : '') + '.</p>' + anBarra(D.ventas / D.meta, '#2b6cb0') : '<p class="small muted">Todavía no has puesto la meta de ' + mesTxt(mes) + '.</p>') +
+    (cfgE ? '<button class="btn mini sec" data-act="aneditar" data-l="' + lugar + '">✏️ Cambiar meta y mano de obra</button>' : '') + '</div>' +
+    '<div class="card"><h2 class="serif">Mes a mes</h2>' + anSvg(lugar) + '</div>' +
+    '<div class="card"><h2 class="serif">Qué deja plata</h2>' + (D.prods.slice(0, 6).map(function (p) {
+      return '<div class="linea"><div class="nm"><b>' + h(p.nombre) + '</b><small>vendido ' + money(p.ing) + '</small></div><b class="num">' + money(p.gan) + (p.mg !== null ? ' <small>(' + Math.round(p.mg * 100) + '%)</small>' : '') + '</b></div>';
+    }).join('') || '<div class="vacio">Sin ventas este mes.</div>') + '</div>' +
+    '<div class="card"><h2 class="serif">Sugerencias</h2>' + (sg.map(function (x) { return '<div class="aviso">💡 ' + h(x) + '</div>'; }).join('') || '<div class="vacio">Sin sugerencias por ahora.</div>') + '</div>';
+}
+function anUnif() {
+  const mes = S.an.mes, F = anDatos('finca', mes), L = anDatos('local', mes), U = anDatos('uni', mes), sm = anSemaforo(U);
+  const fila = function (t, a, b, c) { return '<tr><td>' + t + '</td><td class="num">' + a + '</td><td class="num">' + b + '</td><td class="num"><b>' + c + '</b></td></tr>'; };
+  const pc = function (D) { return D.pe ? Math.round(D.ventas / D.pe * 100) + '%' : '—'; };
+  let veredicto = 'Aún no hay datos para comparar.';
+  if (F.ventas > 0 || L.ventas > 0) veredicto = F.final === L.final ? 'Los dos van igual.' : (F.final > L.final ? 'La finca deja más ganancia que el local este mes (' + money(F.final) + ' contra ' + money(L.final) + ').' : 'El local deja más ganancia que la finca este mes (' + money(L.final) + ' contra ' + money(F.final) + ').');
+  const ni = [F, L].filter(function (D) { return !(D.mo > 0); }).map(function (D) { return D.lugar === 'finca' ? 'la finca' : 'el local'; });
+  return '<div class="card" style="background:' + SEM[sm.col][1] + '"><h2 class="serif" style="margin:0">' + SEM[sm.col][0] + ' Todo junto · ' + mesTxt(mes) + '</h2><p style="margin:6px 0 0"><b>' + h(sm.txt) + '</b></p><p class="small" style="margin:6px 0 0">' + h(veredicto) + '</p>' + (ni.length ? '<p class="small" style="margin:6px 0 0">⚠️ Falta anotar la mano de obra de ' + ni.join(' y ') + '.</p>' : '') + '</div>' +
+    '<div class="card"><h2 class="serif">Finca vs Local</h2><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px"><tr><th></th><th>🐐 Finca</th><th>🏪 Local</th><th>Total</th></tr>' +
+    fila('Ventas', money(F.ventas), money(L.ventas), money(U.ventas)) + fila('Ganancia bruta', money(F.gb), money(L.gb), money(U.gb)) + fila('Gastos', money(F.gastos), money(L.gastos), money(U.gastos)) + fila('Mano de obra', money(F.mo), money(L.mo), money(U.mo)) +
+    fila('Ganancia final', money(F.final), money(L.final), money(U.final)) + fila('Equilibrio', F.pe ? money(F.pe) : '—', L.pe ? money(L.pe) : '—', U.pe ? money(U.pe) : '—') + fila('% del equilibrio', pc(F), pc(L), pc(U)) +
+    '</table></div>' + anPorQue(U) + '</div>' +
+    '<div class="card"><h2 class="serif">Mes a mes (todo junto)</h2>' + anSvg('uni') + '</div>' +
+    '<div class="card"><h2 class="serif">Sugerencias</h2>' + (anSugerencias(U).map(function (x) { return '<div class="aviso">💡 ' + h(x) + '</div>'; }).join('') || '<div class="vacio">Sin sugerencias por ahora.</div>') + '</div>';
+}
+function anAnteriores() {
+  const hm = {}; S.d.reg.ventas.forEach(function (v) { const m = mesDe(v.fecha); if (m && m < AN_DESDE) hm[m] = (hm[m] || 0) + (+v.total || 0); });
+  const ks = Object.keys(hm).sort().reverse(); if (!ks.length) return '';
+  return '<details class="card"><summary><b>Meses anteriores (poco confiables)</b></summary><p class="small muted">Antes de noviembre la contabilidad no se llevaba completa, así que estos números pueden no ser exactos.</p>' + ks.map(function (m) { return '<div class="linea"><div class="nm">' + mesTxt(m) + '</div><b class="num">' + money(hm[m]) + '</b></div>'; }).join('') + '</details>';
+}
+VISTAS.analisis = function () {
+  S.an = S.an || { tab: 'uni', mes: anMeses()[anMeses().length - 1] };
+  const ms = anMeses(), esN = S.yo.rol === 'admin', notas = anCfg().notas;
+  return '<div class="titulo serif">📈 Análisis de ventas</div><p class="small muted" style="margin:0 2px 8px">Solo para mirar: no cambia la caja ni los inventarios.</p>' +
+    '<div class="row" style="margin-bottom:8px"><button class="btn mini ' + (S.an.tab === 'uni' ? '' : 'sec') + '" data-act="antab" data-t="uni">Todo junto</button><button class="btn mini ' + (S.an.tab === 'finca' ? '' : 'sec') + '" data-act="antab" data-t="finca">🐐 Finca</button><button class="btn mini ' + (S.an.tab === 'local' ? '' : 'sec') + '" data-act="antab" data-t="local">🏪 Local</button></div>' +
+    '<select data-ch="anmes">' + opts(ms.map(function (m) { return [m, mesTxt(m)]; }), S.an.mes) + '</select>' +
+    (S.an.tab === 'uni' ? anUnif() : anPanel(S.an.tab)) + anAnteriores() +
+    '<div class="card"><h2 class="serif">✍️ Errores o notas</h2><p class="small muted">¿Algún número no te cuadra? Anótalo aquí para revisarlo.</p>' +
+    (esN ? '<button class="btn mini sec" data-act="annota">Marcar un error</button>' : '') +
+    notas.slice().reverse().slice(0, 10).map(function (n) { return '<div class="linea"><div class="nm"><b>' + h(n.cifra) + ' · ' + (n.lugar === 'local' ? 'Local' : n.lugar === 'finca' ? 'Finca' : 'Todo') + '</b><small>' + fechaTxt(n.fecha) + ' · ' + h(n.texto) + '</small></div>' + (esN ? '<button class="btn mini sec" data-act="anquitarnota" data-id="' + h(n.id) + '">✔</button>' : '') + '</div>'; }).join('') + '</div>';
+};
+ACT.antab = function (b) { S.an.tab = b.dataset.t; render(); };
+CH.anmes = function (el) { S.an.mes = el.value; render(); };
+async function anGuardar(mut) {
+  const cfg = JSON.parse(JSON.stringify(S.d.cfg)); cfg.analisis = cfg.analisis || {}; const a = cfg.analisis;
+  a.metas = a.metas || {}; a.nomina = a.nomina || { finca: [], local: [] }; a.notas = a.notas || [];
+  mut(a); await call('guardarConfig', JSON.stringify(cfg)); await cargar();
+}
+ACT.annota = function () {
+  modal('<h2>Marcar un error</h2><label>¿En qué análisis?</label><select id="anNL">' + opts([['uni', 'Todo junto'], ['finca', 'Finca'], ['local', 'Local']], S.an.tab) + '</select><label>¿Qué número?</label><select id="anNC">' + opts(['Ventas', 'Costo de lo vendido', 'Gastos', 'Mano de obra', 'Meta', 'Otro'].map(function (x) { return [x, x]; }), 'Ventas') + '</select><label>¿Qué está mal y por qué?</label><textarea id="anNT" rows="3" placeholder="Ej: este gasto es de otro mes"></textarea><button class="btn full" style="margin-top:10px" data-act="guardarannota">Guardar la nota</button>');
+};
+ACT.guardarannota = async function (b) {
+  const t = val('anNT').trim(); if (!t) return toast('Escribe qué está mal.', 'err');
+  b.disabled = true;
+  try { await anGuardar(function (a) { a.notas.push({ id: 'n' + Date.now(), fecha: hoy(), lugar: val('anNL'), cifra: val('anNC'), texto: t }); }); cerrarModal(); toast('Nota guardada ✅', 'ok'); render(); } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+ACT.anquitarnota = async function (b) { try { await anGuardar(function (a) { a.notas = a.notas.filter(function (n) { return n.id !== b.dataset.id; }); }); render(); } catch (e) { toast(e.message, 'err'); } };
+ACT.aneditar = function (b) {
+  const l = b.dataset.l, cfg = anCfg();
+  S.ane = { l: l, meta: (cfg.metas[l] || {})[S.an.mes] || '', nom: (cfg.nomina[l] || []).map(function (p) { return { n: p.n, s: p.s }; }) };
+  anEditarModal();
+};
+function anLeer() {
+  if (!S.ane || !$('anM')) return;
+  S.ane.meta = val('anM'); S.ane.nom = S.ane.nom.map(function (p, i) { return { n: val('anN' + i), s: val('anS' + i) }; });
+}
+function anEditarModal() {
+  const E = S.ane;
+  modal('<h2>' + (E.l === 'finca' ? '🐐 Finca' : '🏪 Local') + ' · ' + mesTxt(S.an.mes) + '</h2><label>Meta de ventas de este mes ($)</label><input id="anM" inputmode="numeric" value="' + h(E.meta ? fmtN.format(pm(E.meta)) : '') + '">' +
+    '<h3 class="serif">Mano de obra (pago mensual)</h3><p class="small muted">Quienes trabajan en ' + (E.l === 'finca' ? 'la finca (tú, Jefferson, el trabajador…)' : 'el local') + '. Agrega las personas que quieras.</p>' +
+    E.nom.map(function (p, i) { return '<div class="grid2"><div><label>Nombre</label><input id="anN' + i + '" value="' + h(p.n) + '"></div><div><label>Pago al mes ($)</label><input id="anS' + i + '" inputmode="numeric" value="' + h(p.s ? fmtN.format(pm(p.s)) : '') + '"></div></div><button class="btn mini sec" data-act="anquitarp" data-i="' + i + '">Quitar</button>'; }).join('') +
+    '<button class="btn mini sec" data-act="anmasp" style="margin-top:6px">➕ Agregar persona</button><button class="btn full" style="margin-top:10px" data-act="anguardareditar">Guardar</button>');
+}
+ACT.anmasp = function () { anLeer(); S.ane.nom.push({ n: '', s: '' }); anEditarModal(); };
+ACT.anquitarp = function (b) { anLeer(); S.ane.nom.splice(+b.dataset.i, 1); anEditarModal(); };
+ACT.anguardareditar = async function (b) {
+  anLeer(); const E = S.ane; b.disabled = true;
+  try {
+    await anGuardar(function (a) {
+      a.metas[E.l] = a.metas[E.l] || {}; const m = pm(E.meta); if (m > 0) a.metas[E.l][S.an.mes] = m; else delete a.metas[E.l][S.an.mes];
+      a.nomina[E.l] = E.nom.filter(function (p) { return p.n.trim() || pm(p.s) > 0; }).map(function (p) { return { n: p.n.trim() || 'Persona', s: pm(p.s) }; });
+    });
+    cerrarModal(); toast('Guardado ✅', 'ok'); render();
+  } catch (e) { toast(e.message, 'err'); b.disabled = false; }
+};
+MAS.push(['analisis', '📈', 'Análisis de ventas']);
+VISTAS.inicio = (function (base) {
+  return function () { return '<button class="card" data-act="ir" data-v="analisis" style="width:100%;text-align:left;cursor:pointer;border:0"><b>📈 Análisis de ventas</b><br><small>¿La finca y el local se están pagando? Metas, equilibrio y comparación.</small></button>' + base(); };
+})(VISTAS.inicio);
+
 const NAVS = [['inicio', '🏠', 'Inicio'], ['vender', '🛒', 'Ventas'], ['inventario', '📦', 'Inventario'], ['animales', '🐐', 'Animales'], ['caja', '💰', 'Caja'], ['ajustes', '⚙️', 'Ajustes']];
 function ponerNav() {
   const n = $('nav'); if (!n) return;
@@ -4171,6 +4487,7 @@ function render() {
   if (S.tok && S.d) {
     guardiaRol();
     if (modoDe(S.vista) === 'conta' && !contaOk()) { const v0 = S.vista; S.vista = 'portada'; pedirConta(function () { S.vista = v0; render(); window.scrollTo(0, 0); }); }
+    else { const pk = perfilNecesario(); if (pk && !perfilOk(pk)) { const v1 = S.vista; S.vista = 'portada'; pedirPerfil(pk, function () { S.vista = v1; render(); window.scrollTo(0, 0); }); } }
     if (modoDe(S.vista) !== S.modoNav) ponerNav();
   }
   const f = VISTAS[S.vista] || VISTAS.inicio;

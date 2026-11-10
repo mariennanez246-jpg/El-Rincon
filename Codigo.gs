@@ -26,6 +26,7 @@ const HOJAS = {
   'Cierres del local': ['ID', 'Fecha', 'Quién', 'Contado', 'Estado', 'Datos'],
   'Entregas al local': ['ID', 'Fecha', 'Producto', 'Cantidad', 'Datos'],
   'Novedades': ['ID', 'Fecha', 'Quién', 'Novedad', 'Datos'],
+  'Ajustes del local': ['ID', 'Fecha', 'Quién', 'Motivo', 'Datos'],
   'Conteos de inventario': ['ID', 'Fecha', 'Producto', 'Sistema', 'Contado', 'Diferencia', 'Datos'],
   'Animales': ['ID', 'Nombre', 'Tipo', 'Sexo', 'Estado', 'Nacimiento', 'Datos'],
   'Historial animales': ['ID', 'Fecha', 'Animal', 'Evento', 'Detalle', 'Datos'],
@@ -82,6 +83,7 @@ const TIPOS = {
   solicitudes: { hoja: 'Solicitudes', pre: 'so', fila: function (o) { return [o.id, txt_(o.fecha), o.por || '', o.texto || '', o.estado || '']; } },
   cierresLocal: { hoja: 'Cierres del local', pre: 'cl', fila: function (o) { return [o.id, txt_(o.fecha), o.por || '', num_(o.contado), o.estado || '']; } },
   entregasLocal: { hoja: 'Entregas al local', pre: 'el', fila: function (o) { return [o.id, txt_(o.fecha), o.nombre || '', num_(o.cant)]; } },
+  ajustesLocal: { hoja: 'Ajustes del local', pre: 'aj', fila: function (o) { return [o.id, txt_(o.fecha), o.por || '', o.motivo || '']; } },
   novedades: { hoja: 'Novedades', pre: 'nv', fila: function (o) { return [o.id, txt_(o.fecha), o.por || '', o.texto || '']; } },
   conteosInv: { hoja: 'Conteos de inventario', pre: 'ci', fila: function (o) {
     return [o.id, txt_(o.fecha), o.nombre || '', num_(o.sistema), num_(o.contado), num_(o.contado) - num_(o.sistema)];
@@ -167,7 +169,7 @@ function reescribir_(n, rows) {
 
 /* ---------- instalación ---------- */
 function instalar() { asegurar_(); return 'Listo'; }
-const ESTRUCTURA = '4';
+const ESTRUCTURA = '5';
 function asegurar_() {
   if (props_().getProperty('instalado') === '1' && props_().getProperty('estructura') === ESTRUCTURA) return;
   conCandado_(function () {
@@ -249,13 +251,13 @@ function version(token) { validar_(token); return version_(); }
 function todo(token) {
   const u = validar_(token);
   const out = { version: version_(), yo: publico_(u), cfg: leerCfg_(), items: leerItems_(), reg: {} };
-  const ver = PERM_ROL[u.rol] ? { trabajador: ['ordeno', 'animales', 'eventosAnimal', 'novedades', 'solicitudes', 'recetario'], local: ['ventas', 'cierresLocal', 'entregasLocal', 'novedades', 'solicitudes', 'recetario'] }[u.rol] : null;
+  const ver = PERM_ROL[u.rol] ? { trabajador: ['ordeno', 'animales', 'eventosAnimal', 'novedades', 'solicitudes', 'recetario'], local: ['ventas', 'cierresLocal', 'entregasLocal', 'novedades', 'solicitudes', 'ajustesLocal', 'recetario'] }[u.rol] : null;
   if (ver) { delete out.cfg.contaHash; delete out.cfg.contaRec; }
   Object.keys(TIPOS).forEach(function (k) {
     if (ver && ver.indexOf(k) < 0) { out.reg[k] = []; return; }
     let l = leerTipo_(k);
     if (ver && k === 'ventas') l = l.filter(function (x) { return x.lugar === 'local'; });
-    if (ver && (k === 'solicitudes' || k === 'cierresLocal' || k === 'novedades')) l = l.filter(function (x) { return x.por === u.nombre; });
+    if (ver && (k === 'solicitudes' || k === 'cierresLocal' || k === 'novedades' || k === 'ajustesLocal')) l = l.filter(function (x) { return x.por === u.nombre; });
     out.reg[k] = l;
   });
   return JSON.stringify(out);
@@ -300,8 +302,17 @@ function guardar(token, tipo, json) {
   const o = JSON.parse(json);
   if (PERM_ROL[u.rol] && PERM_ROL[u.rol].indexOf(tipo) < 0) throw new Error('PERMISO: tu perfil (' + ROL_TXT[u.rol] + ') no puede registrar eso.');
   if (PERM_ROL[u.rol]) {
-    if (tipo !== 'eventosAnimal' || !o.fecha) o.fecha = hoyBog_();
+    const sols = (tipo === 'ventas' || tipo === 'ajustesLocal') ? leerTipo_('solicitudes') : [];
+    const fechaOk = o.fecha && o.fecha !== hoyBog_() && sols.some(function (x) { return x.tipo === 'reabrir' && x.estado === 'aprobada' && x.por === u.nombre && x.fecha === o.fecha; });
+    if (tipo !== 'eventosAnimal' && !(tipo === 'ventas' && fechaOk)) o.fecha = hoyBog_();
+    if (tipo === 'eventosAnimal' && !o.fecha) o.fecha = hoyBog_();
     if (tipo === 'ventas') o.lugar = 'local';
+    if (tipo === 'ajustesLocal') {
+      const ok = sols.filter(function (x) { return x.id === o.solId && x.tipo === 'inventario' && x.estado === 'aprobada' && x.por === u.nombre; })[0];
+      if (!ok) throw new Error('PERMISO: primero pide la autorización para contar o ajustar el inventario.');
+      if (leerTipo_('ajustesLocal').some(function (x) { return x.solId === o.solId; })) throw new Error('PERMISO: esa autorización ya se usó. Pide otra.');
+      o.por = u.nombre;
+    }
     if (tipo === 'cierresLocal' || tipo === 'solicitudes') { o.estado = 'pendiente'; o.resp = ''; }
   }
   return conCandado_(function () {
@@ -352,7 +363,7 @@ function borrar(token, tipo, id) {
 /* ---------- personas, roles y acceso ---------- */
 const NIVEL = { empleado: 1, trabajador: 1, local: 1, supervisor: 2, admin: 3 };
 const ROL_TXT = { admin: 'Admin', supervisor: 'Supervisor', empleado: 'Empleado', trabajador: 'Trabajador de la finca', local: 'Encargado del local' };
-const PERM_ROL = { trabajador: ['ordeno', 'eventosAnimal', 'novedades', 'solicitudes'], local: ['ventas', 'cierresLocal', 'novedades', 'solicitudes'] };
+const PERM_ROL = { trabajador: ['ordeno', 'eventosAnimal', 'novedades', 'solicitudes'], local: ['ventas', 'cierresLocal', 'novedades', 'solicitudes', 'ajustesLocal'] };
 function esBasico_(u) { return u.rol === 'empleado' || u.rol === 'trabajador' || u.rol === 'local'; }
 function hoyBog_() { return Utilities.formatDate(new Date(), 'America/Bogota', 'yyyy-MM-dd'); }
 function hash_(clave, sal) {
